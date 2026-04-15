@@ -9,6 +9,7 @@ EXTRACT_BIN = _build/default/extract_assets/main.exe
 rocq-build:
 	rocq compile -Q theories Hello theories/Hello.v
 	rocq compile -Q theories Hello theories/ExtractAssets.v
+	rocq compile -Q theories Hello theories/BspBinary.v
 
 ocaml-build: rocq-build
 	dune build extract_assets/main.exe

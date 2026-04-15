@@ -2,3 +2,4 @@
 
 theories/Hello.v
 theories/ExtractAssets.v
+theories/BspBinary.v

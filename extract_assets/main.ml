@@ -114,6 +114,34 @@ let open_pak0 (path : string) : bytes =
   | _ -> data  (* .pk3 or unrecognised — try directly as ZIP *)
 
 (* ------------------------------------------------------------------ *)
+(* JSON manifest                                                        *)
+(* ------------------------------------------------------------------ *)
+
+(** Write manifest.json to the output directory listing all extracted
+    asset paths as a sorted JSON array.  The browser fetches this first
+    so it knows what files to load without a hardcoded path list. *)
+let write_manifest (output : string) (paths : string list) : unit =
+  let buf = Buffer.create (List.length paths * 40) in
+  Buffer.add_string buf "[\n";
+  let n = List.length paths in
+  List.iteri (fun i s ->
+    Buffer.add_string buf "  \"";
+    String.iter (fun c ->
+      match c with
+      | '"'  -> Buffer.add_string buf "\\\""
+      | '\\' -> Buffer.add_string buf "\\\\"
+      | c    -> Buffer.add_char buf c
+    ) s;
+    Buffer.add_char buf '"';
+    if i < n - 1 then Buffer.add_char buf ',';
+    Buffer.add_char buf '\n'
+  ) paths;
+  Buffer.add_string buf "]\n";
+  let manifest_path = Filename.concat output "manifest.json" in
+  write_file manifest_path (Buffer.contents buf);
+  Printf.printf "Wrote %s (%d entries).\n%!" manifest_path n
+
+(* ------------------------------------------------------------------ *)
 (* Core extraction using Rocq-extracted logic                          *)
 (* ------------------------------------------------------------------ *)
 
@@ -152,26 +180,19 @@ let rec extract (source : string) (output : string) : unit =
     write_file dest data
   ) to_extract;
 
-  validate output (List.length to_extract)
+  (* Collect extracted filenames (already sorted) for validation and manifest. *)
+  let extracted_paths = List.map (fun (e : Zip_reader.entry) -> e.filename) to_extract in
+  validate output extracted_paths
 
-and validate (output : string) (extracted_count : int) : unit =
-  (* Collect all extracted file paths relative to the output directory,
-     lowercased for the Rocq-extracted validator. *)
-  let rec walk dir prefix acc =
-    let entries = Sys.readdir dir in
-    Array.fold_left (fun acc name ->
-      let full = Filename.concat dir name in
-      let rel = if prefix = "" then name else prefix ^ "/" ^ name in
-      if Sys.is_directory full then walk full rel acc
-      else (String.lowercase_ascii rel) :: acc
-    ) acc entries
-  in
-  let extracted_lc = walk output "" [] in
+and validate (output : string) (paths : string list) : unit =
+  (* Lowercase for the Rocq-extracted validator (case-insensitive matching). *)
+  let extracted_lc = List.map String.lowercase_ascii paths in
   let extracted_cl = List.map charlist_of_string extracted_lc in
 
-  if Extract_assets_core.validate_manifest extracted_cl then
-    Printf.printf "Done — %d files extracted and manifest validated.\n%!" extracted_count
-  else begin
+  if Extract_assets_core.validate_manifest extracted_cl then begin
+    Printf.printf "Done — %d files extracted and manifest validated.\n%!" (List.length paths);
+    write_manifest output paths
+  end else begin
     let missing_f = Extract_assets_core.missing_files extracted_cl in
     let missing_p = Extract_assets_core.missing_prefixes extracted_cl in
     Printf.eprintf "error: the following required assets are missing from pak0.pk3:\n%!";

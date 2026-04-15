@@ -1,4 +1,3 @@
--R . Hello
--exclude-dir _opam
+-R theories Hello
 
-Hello.v
+theories/Hello.v

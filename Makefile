@@ -1,9 +1,13 @@
 .PHONY: build test clean
 
-build:
-	coqc -R . Hello Hello.v
+CoqMakefile: _CoqProject
+	coq_makefile -f _CoqProject -o CoqMakefile
+
+build: CoqMakefile
+	$(MAKE) -f CoqMakefile
 
 test: build
 
 clean:
-	rm -f *.vo *.vok *.vos *.glob .*.aux
+	$(MAKE) -f CoqMakefile clean 2>/dev/null || true
+	rm -f CoqMakefile

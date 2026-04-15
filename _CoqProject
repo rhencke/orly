@@ -1,3 +1,4 @@
 -R . Hello
+-exclude-dir _opam
 
 Hello.v

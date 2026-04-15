@@ -12,9 +12,18 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the Rocq/JavaScript boundary and
 
 ### Prerequisites
 
-- Python 3 (stdlib only — no pip install needed)
+- **Rocq + OCaml** via [opam](https://opam.ocaml.org/): `opam install rocq-prover decompress`
+  (OCaml 5.3 recommended; matches the CI image)
 - Your own copy of the **Quake 3 Arena Demo v1.11** installer or `pak0.pk3`
   (see [ASSETS.md](ASSETS.md) for sources and redistribution constraints)
+
+> **Tip:** To match CI exactly without a local opam setup, run everything
+> inside Docker:
+> ```sh
+> docker build -t orly .
+> docker run --rm -v "$PWD:/src" orly sh -c \
+>   "cp -r /src /tmp/work && cd /tmp/work && opam exec -- make assets DEMO=/src/pak0.pk3"
+> ```
 
 ### 1. Extract game assets
 
@@ -31,12 +40,13 @@ make assets DEMO=/path/to/Q3ADemo.exe
 make assets DEMO=/path/to/demoq3/pak0.pk3
 ```
 
-Assets are extracted to `docs/assets/` (gitignored).  The script validates
-every required file against the manifest in [ASSETS.md](ASSETS.md) and
-fails loudly if anything is missing.
+This builds the `extract-assets` binary first (Rocq → OCaml → native), then
+runs it.  Assets are extracted to `docs/assets/` (gitignored).  The extractor
+validates every required file against the manifest in [ASSETS.md](ASSETS.md)
+and fails loudly if anything is missing.
 
 > **Windows installer note:** `Q3ADemo.exe` uses Cabinet-based compression
-> that cannot always be opened natively.  If the script reports an error,
+> that cannot always be opened natively.  If the extractor reports an error,
 > extract `pak0.pk3` first with 7-Zip:
 > ```sh
 > 7z e Q3ADemo.exe demoq3/pak0.pk3 -o/tmp/q3
@@ -53,18 +63,26 @@ fails loudly if anything is missing.
 make serve
 ```
 
-Opens a local HTTP server at <http://localhost:8080>.  The game shell is at
-`docs/index.html`.  Assets must be extracted first (step 1); if `docs/assets/`
-is missing, `make serve` warns but still starts the server so you can work
-on the shell without assets.
+Opens a local HTTP server at <http://localhost:8080> (requires Python 3 for the
+dev server).  The game shell is at `docs/index.html`.  Assets must be extracted
+first (step 1); if `docs/assets/` is missing, `make serve` warns but still
+starts the server so you can work on the shell without assets.
 
-### Build and test (Rocq theories)
+### Build and test
 
 ```sh
-make test   # compiles theories/ with rocq compile
-make clean  # removes generated .vo/.glob files
+make test   # compiles Rocq theories, extracts OCaml, builds extract-assets binary
+make clean  # removes .vo/.glob files and the dune build directory
 ```
 
-CI runs `make test` via Docker (see `.github/workflows/ci.yml`).  You do not
-need a local Rocq install; use the published Docker image if you want to match
-CI exactly.
+`make test` runs the full pipeline:
+
+1. **`rocq-build`** — compiles `theories/Hello.v` and `theories/ExtractAssets.v`,
+   running all proofs and emitting `extract_assets/extract_assets_core.{ml,mli}`
+   via Rocq's `Extraction` command.
+2. **`ocaml-build`** — builds the extracted module and the I/O driver
+   (`extract_assets/main.ml`) into the `extract-assets` native binary via dune.
+
+CI runs `make test` inside Docker (see `.github/workflows/ci.yml`).  The
+Dockerfile installs Rocq, OCaml 5.3, and the `decompress` library — no C
+dependencies required.

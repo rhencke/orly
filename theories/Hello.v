@@ -1,6 +1,6 @@
-(** * Hello, Coq!
+(** * Hello, Rocq!
 
-    A minimal Coq program with proof-based verification. *)
+    A minimal Rocq program with proof-based verification. *)
 
 Require Import Strings.String.
 Open Scope string_scope.

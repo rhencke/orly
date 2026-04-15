@@ -18,8 +18,8 @@ jobs:
           ocaml-compiler: "4.14"
           cache: true
 
-      - name: Install Coq
-        run: opam install -y coq
+      - name: Install Rocq
+        run: opam install -y rocq-prover
 
       - name: Verify proofs
         run: opam exec -- make test

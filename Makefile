@@ -7,7 +7,6 @@ DEMO ?=
 EXTRACT_BIN = _build/default/extract_assets/main.exe
 
 rocq-build:
-	rocq compile -Q theories Bsp theories/Hello.v
 	rocq compile -Q theories Bsp theories/ExtractAssets.v
 	rocq compile -Q theories Bsp theories/BspBinary.v
 	rocq compile -Q theories Bsp theories/BspFormat.v

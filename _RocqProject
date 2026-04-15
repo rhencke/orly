@@ -1,3 +1,4 @@
 -Q theories Hello
 
 theories/Hello.v
+theories/ExtractAssets.v

@@ -8,11 +8,12 @@ on:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/rhencke/orly:latest
 
     steps:
       - uses: actions/checkout@v4
 
+      - name: Pull or build container image
+        run: docker pull ghcr.io/rhencke/orly:latest || docker build -t ghcr.io/rhencke/orly:latest .
+
       - name: Verify proofs
-        run: opam exec -- make test
+        run: docker run --rm -v "$PWD:/workspace" ghcr.io/rhencke/orly:latest opam exec -- make test

@@ -10,3 +10,4 @@ theories/BspTexture.v
 theories/BspBrush.v
 theories/BspLightmapVisEffect.v
 theories/BspEntity.v
+theories/BspFile.v

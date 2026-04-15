@@ -17,6 +17,7 @@ rocq-build:
 	rocq compile -Q theories Bsp theories/BspBrush.v
 	rocq compile -Q theories Bsp theories/BspLightmapVisEffect.v
 	rocq compile -Q theories Bsp theories/BspEntity.v
+	rocq compile -Q theories Bsp theories/BspFile.v
 
 ocaml-build: rocq-build
 	dune build extract_assets/main.exe

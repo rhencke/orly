@@ -12,6 +12,7 @@ rocq-build:
 	rocq compile -Q theories Hello theories/BspBinary.v
 	rocq compile -Q theories Hello theories/BspFormat.v
 	rocq compile -Q theories Hello theories/BspPlaneVertex.v
+	rocq compile -Q theories Hello theories/BspNodeLeaf.v
 
 ocaml-build: rocq-build
 	dune build extract_assets/main.exe

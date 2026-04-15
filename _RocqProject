@@ -5,3 +5,4 @@ theories/ExtractAssets.v
 theories/BspBinary.v
 theories/BspFormat.v
 theories/BspPlaneVertex.v
+theories/BspNodeLeaf.v

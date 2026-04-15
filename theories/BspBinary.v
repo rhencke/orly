@@ -56,8 +56,20 @@ Definition get_u32_le (bs : bytes) (i : nat) : option Z :=
   end.
 
 (* ------------------------------------------------------------------ *)
-(** ** Signed 32-bit integer reader                                     *)
+(** ** Signed integer readers                                           *)
 (* ------------------------------------------------------------------ *)
+
+(** Two's-complement conversion for 16-bit values: if the unsigned
+    value has bit 15 set, subtract [2^16] to recover the signed value. *)
+Definition to_i16 (u : Z) : Z :=
+  if 32768 <=? u then u - 65536 else u.
+
+(** [get_i16_le bs i] reads a signed 16-bit little-endian value. *)
+Definition get_i16_le (bs : bytes) (i : nat) : option Z :=
+  match get_u16_le bs i with
+  | None   => None
+  | Some u => Some (to_i16 u)
+  end.
 
 (** Two's-complement: if the unsigned value has bit 31 set,
     subtract [2^32] to recover the signed value. *)
@@ -118,6 +130,16 @@ Definition get_f32_le (bs : bytes) (i : nat) : option Q :=
 (** Byte reads from a singleton list succeed. *)
 Lemma get_u8_singleton : forall b,
   get_u8 [b] 0 = Some b.
+Proof. reflexivity. Qed.
+
+(** Two zero bytes decode as signed 0. *)
+Lemma get_i16_le_zero :
+  get_i16_le [0; 0] 0 = Some 0.
+Proof. reflexivity. Qed.
+
+(** All-ones bytes are [−1] in 16-bit two's complement. *)
+Lemma get_i16_le_minus_one :
+  get_i16_le [255; 255] 0 = Some (-1).
 Proof. reflexivity. Qed.
 
 (** Four zero bytes decode as [0]. *)

@@ -16,9 +16,18 @@ jobs:
         uses: ocaml/setup-ocaml@v3
         with:
           ocaml-compiler: "4.14"
-          cache: true
+
+      - name: Cache Coq installation
+        id: cache-coq
+        uses: actions/cache@v4
+        with:
+          path: ~/.opam
+          key: ${{ runner.os }}-ocaml-4.14-coq-${{ hashFiles('.github/workflows/ci.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-ocaml-4.14-coq-
 
       - name: Install Coq
+        if: steps.cache-coq.outputs.cache-hit != 'true'
         run: opam install -y coq
 
       - name: Verify proofs

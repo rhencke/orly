@@ -1,7 +1,7 @@
 .PHONY: build test clean
 
 build:
-	rocqc -R theories Hello theories/Hello.v
+	rocq compile -R theories Hello theories/Hello.v
 
 test: build
 

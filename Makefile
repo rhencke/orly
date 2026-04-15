@@ -1,9 +1,9 @@
 .PHONY: build test clean
 
 build:
-	coqc -R . Hello Hello.v
+	coqc -R theories Hello theories/Hello.v
 
 test: build
 
 clean:
-	rm -f *.vo *.vok *.vos *.glob .*.aux
+	rm -f theories/*.vo theories/*.vok theories/*.vos theories/*.glob theories/.*.aux

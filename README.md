@@ -77,7 +77,7 @@ make clean  # removes .vo/.glob files and the dune build directory
 
 `make test` runs the full pipeline:
 
-1. **`rocq-build`** — compiles `theories/Hello.v` and `theories/ExtractAssets.v`,
+1. **`rocq-build`** — compiles all Rocq theories under `theories/`,
    running all proofs and emitting `extract_assets/extract_assets_core.{ml,mli}`
    via Rocq's `Extraction` command.
 2. **`ocaml-build`** — builds the extracted module and the I/O driver

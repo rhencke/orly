@@ -25,8 +25,8 @@
 From Stdlib Require Import List.
 From Stdlib Require Import ZArith.
 From Stdlib Require Import QArith.
-From Hello Require Import BspBinary.
-From Hello Require Import BspTexture.
+From Bsp Require Import BspBinary.
+From Bsp Require Import BspTexture.
 Import ListNotations.
 Open Scope Z_scope.
 

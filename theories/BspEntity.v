@@ -22,7 +22,7 @@
 From Stdlib Require Import List.
 From Stdlib Require Import ZArith.
 From Stdlib Require Import Bool.
-From Hello Require Import BspBinary.
+From Bsp Require Import BspBinary.
 Import ListNotations.
 Open Scope Z_scope.
 

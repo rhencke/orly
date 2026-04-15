@@ -7,16 +7,16 @@ DEMO ?=
 EXTRACT_BIN = _build/default/extract_assets/main.exe
 
 rocq-build:
-	rocq compile -Q theories Hello theories/Hello.v
-	rocq compile -Q theories Hello theories/ExtractAssets.v
-	rocq compile -Q theories Hello theories/BspBinary.v
-	rocq compile -Q theories Hello theories/BspFormat.v
-	rocq compile -Q theories Hello theories/BspPlaneVertex.v
-	rocq compile -Q theories Hello theories/BspNodeLeaf.v
-	rocq compile -Q theories Hello theories/BspTexture.v
-	rocq compile -Q theories Hello theories/BspBrush.v
-	rocq compile -Q theories Hello theories/BspLightmapVisEffect.v
-	rocq compile -Q theories Hello theories/BspEntity.v
+	rocq compile -Q theories Bsp theories/Hello.v
+	rocq compile -Q theories Bsp theories/ExtractAssets.v
+	rocq compile -Q theories Bsp theories/BspBinary.v
+	rocq compile -Q theories Bsp theories/BspFormat.v
+	rocq compile -Q theories Bsp theories/BspPlaneVertex.v
+	rocq compile -Q theories Bsp theories/BspNodeLeaf.v
+	rocq compile -Q theories Bsp theories/BspTexture.v
+	rocq compile -Q theories Bsp theories/BspBrush.v
+	rocq compile -Q theories Bsp theories/BspLightmapVisEffect.v
+	rocq compile -Q theories Bsp theories/BspEntity.v
 
 ocaml-build: rocq-build
 	dune build extract_assets/main.exe

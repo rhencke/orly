@@ -4,7 +4,9 @@ This document defines the exact acceptance target for
 [issue #12](https://github.com/rhencke/orly/issues/12).  Everything on this
 list must be true before v1 ships.  Anything not on this list is either
 explicitly deferred to [issue #18](https://github.com/rhencke/orly/issues/18)
-or out of scope entirely.
+or out of scope entirely.  The Rocq/JS boundary that governs which items
+belong in Rocq versus JavaScript is defined in
+[ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Chosen level: q3dm1 — Arena Gate
 

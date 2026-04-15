@@ -3,7 +3,9 @@
 This document defines which responsibilities live in Rocq (executed via
 JsCoq in the browser) and which stay in the JavaScript/browser shell.
 Later issues should be judged against these decisions to determine whether
-they are on-architecture or off-architecture.
+they are on-architecture or off-architecture.  The concrete v1 acceptance
+criteria that this boundary governs are in
+[V1_CHECKLIST.md](V1_CHECKLIST.md).
 
 ## Execution path
 

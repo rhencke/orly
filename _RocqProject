@@ -4,3 +4,4 @@ theories/Hello.v
 theories/ExtractAssets.v
 theories/BspBinary.v
 theories/BspFormat.v
+theories/BspPlaneVertex.v

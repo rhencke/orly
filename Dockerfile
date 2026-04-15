@@ -1,4 +1,4 @@
-FROM ocaml/opam:debian-12-ocaml-4.14
+FROM ocaml/opam:debian-12-ocaml-5.3
 
 # Install system build tools
 RUN sudo apt-get update \
@@ -10,8 +10,8 @@ RUN sudo apt-get update \
         linux-libc-dev \
     && sudo rm -rf /var/lib/apt/lists/*
 
-# Install Rocq and clean up the opam cache
-RUN opam install -y rocq-prover \
+# Install Rocq and decompress (pure-OCaml DEFLATE/gzip), clean up opam cache
+RUN opam install -y rocq-prover decompress \
     && opam clean --all
 
 WORKDIR /workspace

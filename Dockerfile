@@ -8,10 +8,11 @@ RUN sudo apt-get update \
         pkg-config \
         libgmp-dev \
         linux-libc-dev \
+        zlib1g-dev \
     && sudo rm -rf /var/lib/apt/lists/*
 
 # Install Rocq and clean up the opam cache
-RUN opam install -y rocq-prover \
+RUN opam install -y rocq-prover camlzip \
     && opam clean --all
 
 WORKDIR /workspace

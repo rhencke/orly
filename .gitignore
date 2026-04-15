@@ -46,3 +46,8 @@ time-of-build-pretty.log
 
 # extracted demo assets — EULA prohibits committing or redistributing individually
 docs/assets/
+
+# OCaml build artifacts from Rocq extraction and ocamlfind compilation
+extract_assets/extract_assets_core.ml
+extract_assets/extract_assets_core.mli
+extract_assets/extract-assets

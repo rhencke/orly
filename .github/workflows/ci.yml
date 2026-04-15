@@ -8,18 +8,11 @@ on:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/rhencke/orly:latest
 
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up OCaml
-        uses: ocaml/setup-ocaml@v3
-        with:
-          ocaml-compiler: "4.14"
-          cache: true
-
-      - name: Install Rocq
-        run: opam install -y rocq-prover
 
       - name: Verify proofs
         run: opam exec -- make test

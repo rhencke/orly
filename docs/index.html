@@ -57,6 +57,26 @@
       color: #666;
     }
 
+    /* ── status bar ──────────────────────────────────────────── */
+    #status-bar {
+      flex: 0 0 auto;
+      padding: 0.35rem 1rem;
+      font-size: 0.8rem;
+      text-align: center;
+      border-bottom: 1px solid transparent;
+    }
+    #status-bar[hidden] { display: none; }
+    #status-bar.loading {
+      background: #111a11;
+      color: #8c8;
+      border-bottom-color: #1a3a1a;
+    }
+    #status-bar.error {
+      background: #1f0f0f;
+      color: #f88;
+      border-bottom-color: #3a1a1a;
+    }
+
     /* ── main split ──────────────────────────────────────────── */
     #main {
       flex: 1 1 auto;
@@ -208,6 +228,9 @@
     <span class="subtitle">Rocq · JsCoq · browser</span>
   </header>
 
+  <!-- status bar: shows loading progress and surfaces errors in the UI -->
+  <div id="status-bar" role="alert" aria-live="polite" hidden></div>
+
   <div id="main">
     <!-- ── game canvas (Quake rendering target: issues #15, #16) ── -->
     <div id="game-surface">
@@ -251,24 +274,58 @@ Qed.
   </div>
 
   <script type="module">
+    // ── status bar helpers ───────────────────────────────────────
+    const statusBar = document.getElementById('status-bar');
+
+    function showStatus(msg, type = 'loading') {
+      statusBar.hidden = false;
+      statusBar.className = type;
+      statusBar.textContent = msg;
+    }
+
+    function clearStatus() {
+      statusBar.hidden = true;
+      statusBar.className = '';
+      statusBar.textContent = '';
+    }
+
+    // ── global error surface ─────────────────────────────────────
+    // Catch anything that slips through — script errors, failed fetches,
+    // JsCoq internal errors that bubble up as uncaught exceptions.
+    window.addEventListener('error', (e) => {
+      showStatus(`Error: ${e.message}`, 'error');
+    });
+    window.addEventListener('unhandledrejection', (e) => {
+      const msg = e.reason?.message || e.reason || 'Unknown error';
+      showStatus(`Error: ${msg}`, 'error');
+    });
+
     // ── JsCoq bootstrap ─────────────────────────────────────────
-    // Loaded from jsDelivr CDN. base_path points to the same CDN origin
-    // so JsCoq can resolve its worker scripts and Coq package bundles.
+    // Loaded from jsDelivr CDN. Uses dynamic import so we can catch
+    // network failures and surface them in the status bar instead of
+    // silently failing (a static import failure kills the whole module).
     const JSCOQ_CDN = 'https://cdn.jsdelivr.net/npm/jscoq@0.17.1/';
 
-    import { JsCoq } from 'https://cdn.jsdelivr.net/npm/jscoq@0.17.1/jscoq.js';
-
-    JsCoq.start(
-      JSCOQ_CDN,
-      ['.coq-code'],
-      {
-        prelude:       true,
-        implicit_libs: true,
-        editor:        { mode: { 'company-coq': true } },
-        init_pkgs:     ['init'],
-        all_pkgs:      ['coq'],
-      }
-    );
+    showStatus('Loading JsCoq…');
+    try {
+      const { JsCoq } = await import('https://cdn.jsdelivr.net/npm/jscoq@0.17.1/jscoq.js');
+      showStatus('Starting Rocq kernel…');
+      JsCoq.start(
+        JSCOQ_CDN,
+        ['.coq-code'],
+        {
+          prelude:       true,
+          implicit_libs: true,
+          editor:        { mode: { 'company-coq': true } },
+          init_pkgs:     ['init'],
+          all_pkgs:      ['coq'],
+        }
+      );
+      clearStatus();
+    } catch (err) {
+      showStatus(`Failed to load JsCoq: ${err.message}`, 'error');
+      console.error('JsCoq bootstrap failed:', err);
+    }
 
     // ── game canvas sizing ───────────────────────────────────────
     // Keep the canvas pixel dimensions in sync with its CSS layout size

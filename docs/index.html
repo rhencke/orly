@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <!--
+    viewport-fit=cover: let content fill edge-to-edge on notched phones;
+    safe-area-inset-* padding below keeps UI off the notch/home bar.
+  -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>orly — Rocq in the browser</title>
+
+  <!--
+    coi-serviceworker: patches COOP/COEP headers via a service worker so
+    JsCoq's SharedArrayBuffer-based workers function on GitHub Pages, which
+    does not send these headers from the origin server.
+    Source: https://github.com/gzuidhof/coi-serviceworker (MIT)
+  -->
+  <script src="coi-serviceworker.js"></script>
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: system-ui, sans-serif;
+      background: #0d0d0d;
+      color: #e0e0e0;
+      display: flex;
+      flex-direction: column;
+      height: 100dvh;
+      overflow: hidden;
+      /* respect notch / home-bar on iOS */
+      padding-bottom: env(safe-area-inset-bottom);
+      padding-left:   env(safe-area-inset-left);
+      padding-right:  env(safe-area-inset-right);
+      /* suppress elastic over-scroll that looks odd in a game shell */
+      overscroll-behavior: none;
+    }
+
+    /* ── header ─────────────────────────────────────────────── */
+    #orly-header {
+      flex: 0 0 auto;
+      padding: 0.4rem 1rem;
+      background: #1a1a2e;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      border-bottom: 1px solid #2a2a4e;
+    }
+    #orly-header h1 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      color: #a0c4ff;
+    }
+    #orly-header .subtitle {
+      font-size: 0.75rem;
+      color: #666;
+    }
+
+    /* ── status bar ──────────────────────────────────────────── */
+    #status-bar {
+      flex: 0 0 auto;
+      padding: 0.35rem 1rem;
+      font-size: 0.8rem;
+      text-align: center;
+      border-bottom: 1px solid transparent;
+    }
+    #status-bar[hidden] { display: none; }
+    #status-bar.loading {
+      background: #111a11;
+      color: #8c8;
+      border-bottom-color: #1a3a1a;
+    }
+    #status-bar.error {
+      background: #1f0f0f;
+      color: #f88;
+      border-bottom-color: #3a1a1a;
+    }
+
+    /* ── main split ──────────────────────────────────────────── */
+    #main {
+      flex: 1 1 auto;
+      display: flex;
+      flex-direction: column;
+      min-height: 0; /* allow children to shrink */
+    }
+
+    /* ── game canvas ─────────────────────────────────────────── */
+    #game-surface {
+      flex: 1 1 auto;
+      position: relative;
+      background: #000;
+      /* guarantee at least some canvas visible on very small phones */
+      min-height: 25svh;
+      min-width: 0;
+    }
+    #game-canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      /* canvas intrinsic size is set by JS; CSS fills the container */
+    }
+    #game-placeholder {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: #333;
+      font-size: 0.85rem;
+      pointer-events: none;
+      gap: 0.4rem;
+    }
+    #game-placeholder .label {
+      font-size: 1.5rem;
+      color: #222;
+    }
+
+    /* ── drag-to-resize handle ───────────────────────────────── */
+    /*
+      Visual: a 4px pill centered in a 20px touch-friendly strip.
+      In column layout the pill is wide (horizontal divider).
+      In row layout the pill is tall (vertical divider).
+    */
+    #resize-handle {
+      flex: 0 0 20px;
+      background: transparent;
+      cursor: ns-resize;
+      touch-action: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      /* prevent text selection while dragging */
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    #resize-handle::before {
+      content: '';
+      display: block;
+      background: #2a2a4e;
+      border-radius: 3px;
+      /* column mode: wide horizontal pill */
+      width: 48px;
+      height: 4px;
+      transition: background 0.15s;
+    }
+    #resize-handle:hover::before,
+    #resize-handle:active::before { background: #a0c4ff; }
+
+    /* ── JsCoq IDE panel ─────────────────────────────────────── */
+    #jscoq-panel {
+      /* svh: stable viewport height — doesn't shift when mobile
+         browser chrome appears/disappears during scroll */
+      flex: 0 0 38svh;
+      min-height: 120px;
+      max-height: 65svh;
+      overflow: hidden;
+      border-top: 2px solid #2a2a4e;
+      background: #fff; /* JsCoq ships a light-theme IDE */
+      position: relative;
+    }
+
+    /* JsCoq uses its own internal layout — let it fill the panel */
+    #ide-wrapper {
+      width: 100%;
+      height: 100%;
+    }
+
+    /* ══════════════════════════════════════════════════════════
+       RESPONSIVE: landscape phone
+       Trigger: orientation landscape AND height ≤ 560px.
+       On a typical phone in landscape this is true; on a tablet
+       or laptop it is not (height > 560px → desktop query wins).
+       ══════════════════════════════════════════════════════════ */
+    @media (orientation: landscape) and (max-height: 560px) {
+      /* ultra-compact header to save vertical pixels */
+      #orly-header { padding: 0.2rem 0.75rem; }
+      #orly-header h1 { font-size: 0.9rem; }
+      #orly-header .subtitle { display: none; }
+
+      /* flip to horizontal split */
+      #main { flex-direction: row; }
+
+      /* resize handle becomes a vertical bar */
+      #resize-handle { cursor: ew-resize; }
+      #resize-handle::before { width: 4px; height: 48px; }
+
+      /* JsCoq panel becomes right sidebar */
+      #jscoq-panel {
+        flex: 0 0 42vw;
+        max-width: 480px;
+        min-width: 180px;
+        height: 100%;
+        min-height: 0;
+        max-height: none;
+        border-top: none;
+        border-left: 2px solid #2a2a4e;
+      }
+    }
+
+    /* ══════════════════════════════════════════════════════════
+       RESPONSIVE: wide screens (tablet landscape / desktop)
+       ══════════════════════════════════════════════════════════ */
+    @media (min-width: 1024px) {
+      /* flip to horizontal split */
+      #main { flex-direction: row; }
+
+      /* resize handle becomes a vertical bar */
+      #resize-handle { cursor: ew-resize; }
+      #resize-handle::before { width: 4px; height: 48px; }
+
+      /* JsCoq panel becomes right sidebar */
+      #jscoq-panel {
+        flex: 0 0 480px;
+        height: 100%;
+        min-height: 0;
+        max-height: none;
+        border-top: none;
+        border-left: 2px solid #2a2a4e;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header id="orly-header">
+    <h1>orly</h1>
+    <span class="subtitle">Rocq · JsCoq · browser</span>
+  </header>
+
+  <!-- status bar: shows loading progress and surfaces errors in the UI -->
+  <div id="status-bar" role="alert" aria-live="polite" hidden></div>
+
+  <div id="main">
+    <!-- ── game canvas (Quake rendering target: issues #15, #16) ── -->
+    <div id="game-surface">
+      <canvas id="game-canvas" aria-label="Game surface"></canvas>
+      <div id="game-placeholder">
+        <span class="label">[ game canvas ]</span>
+        <span>Quake rendering target — coming in <a href="https://github.com/rhencke/orly/issues/15" style="color:#444">#15</a></span>
+      </div>
+    </div>
+
+    <!-- drag handle to resize the two panels -->
+    <div id="resize-handle" role="separator" aria-label="Drag to resize"></div>
+
+    <!-- ── JsCoq IDE panel ── -->
+    <div id="jscoq-panel">
+      <div id="ide-wrapper" class="toggled">
+        <div id="code-wrapper">
+          <div id="document">
+            <textarea class="coq-code">
+(** * Hello, Rocq!
+
+    A minimal Rocq program with proof-based verification. *)
+
+Require Import Strings.String.
+Open Scope string_scope.
+
+(** A greeting function. *)
+Definition hello (name : string) : string :=
+  "Hello, " ++ name ++ "!".
+
+(** [hello "world"] produces ["Hello, world!"]. *)
+Theorem hello_world : hello "world" = "Hello, world!".
+Proof.
+  reflexivity.
+Qed.
+            </textarea>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    // ── status bar helpers ───────────────────────────────────────
+    const statusBar = document.getElementById('status-bar');
+
+    function showStatus(msg, type = 'loading') {
+      statusBar.hidden = false;
+      statusBar.className = type;
+      statusBar.textContent = msg;
+    }
+
+    function clearStatus() {
+      statusBar.hidden = true;
+      statusBar.className = '';
+      statusBar.textContent = '';
+    }
+
+    // ── global error surface ─────────────────────────────────────
+    // Catch anything that slips through — script errors, failed fetches,
+    // JsCoq internal errors that bubble up as uncaught exceptions.
+    window.addEventListener('error', (e) => {
+      showStatus(`Error: ${e.message}`, 'error');
+    });
+    window.addEventListener('unhandledrejection', (e) => {
+      const msg = e.reason?.message || e.reason || 'Unknown error';
+      showStatus(`Error: ${msg}`, 'error');
+    });
+
+    // ── JsCoq bootstrap ─────────────────────────────────────────
+    // Loaded from jsDelivr CDN. Uses dynamic import so we can catch
+    // network failures and surface them in the status bar instead of
+    // silently failing (a static import failure kills the whole module).
+    const JSCOQ_CDN = 'https://cdn.jsdelivr.net/npm/jscoq@0.17.1/';
+
+    showStatus('Loading JsCoq…');
+    try {
+      const { JsCoq } = await import('https://cdn.jsdelivr.net/npm/jscoq@0.17.1/jscoq.js');
+      showStatus('Starting Rocq kernel…');
+      JsCoq.start(
+        JSCOQ_CDN,
+        ['.coq-code'],
+        {
+          prelude:       true,
+          implicit_libs: true,
+          editor:        { mode: { 'company-coq': true } },
+          init_pkgs:     ['init'],
+          all_pkgs:      ['coq'],
+        }
+      );
+      clearStatus();
+    } catch (err) {
+      showStatus(`Failed to load JsCoq: ${err.message}`, 'error');
+      console.error('JsCoq bootstrap failed:', err);
+    }
+
+    // ── game canvas sizing ───────────────────────────────────────
+    // Keep the canvas pixel dimensions in sync with its CSS layout size
+    // so future renderers get a correctly sized drawing surface.
+    const canvas = document.getElementById('game-canvas');
+    const ro = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect;
+      canvas.width  = Math.round(width);
+      canvas.height = Math.round(height);
+    });
+    ro.observe(canvas.parentElement);
+
+    // ── direction-aware drag-to-resize ───────────────────────────
+    //
+    // CSS switches #main between column (portrait/narrow) and row
+    // (landscape phone / desktop) via media queries.  The JS resize
+    // handler must match: drag vertically in column mode, horizontally
+    // in row mode.  On layout-mode change we also reset any inline flex
+    // override so the CSS default sizes take over cleanly.
+    //
+    // Media queries that switch to row layout (must match CSS @media):
+    const LANDSCAPE_PHONE = '(orientation: landscape) and (max-height: 560px)';
+    const WIDE_SCREEN      = '(min-width: 1024px)';
+    const rowModeQuery = window.matchMedia(`${LANDSCAPE_PHONE}, ${WIDE_SCREEN}`);
+
+    const isRowMode = () => rowModeQuery.matches;
+
+    const handle     = document.getElementById('resize-handle');
+    const jscoqPanel = document.getElementById('jscoq-panel');
+    let dragging = false, startPos = 0, startSize = 0;
+
+    const onStart = (x, y) => {
+      dragging  = true;
+      startPos  = isRowMode() ? x : y;
+      startSize = isRowMode() ? jscoqPanel.offsetWidth : jscoqPanel.offsetHeight;
+    };
+
+    const onMove = (x, y) => {
+      if (!dragging) return;
+      if (isRowMode()) {
+        // dragging left (negative delta) increases the right-side panel
+        const delta = startPos - x;
+        const max   = window.innerWidth * 0.8;
+        const next  = Math.max(180, Math.min(max, startSize + delta));
+        jscoqPanel.style.flex = `0 0 ${next}px`;
+      } else {
+        // dragging up (negative delta) increases the bottom panel
+        const delta = startPos - y;
+        const max   = window.innerHeight * 0.8;
+        const next  = Math.max(120, Math.min(max, startSize + delta));
+        jscoqPanel.style.flex = `0 0 ${next}px`;
+      }
+    };
+
+    const onEnd = () => { dragging = false; };
+
+    // Reset inline size when the layout mode changes (e.g. phone rotated)
+    // so CSS default proportions take over for the new orientation.
+    rowModeQuery.addEventListener('change', () => {
+      jscoqPanel.style.flex = '';
+    });
+
+    // mouse
+    handle.addEventListener('mousedown',  (e) => onStart(e.clientX, e.clientY));
+    document.addEventListener('mousemove', (e) => onMove(e.clientX, e.clientY));
+    document.addEventListener('mouseup',   onEnd);
+
+    // touch (passive where possible to avoid blocking scroll on the rest of the page)
+    handle.addEventListener('touchstart', (e) => {
+      onStart(e.touches[0].clientX, e.touches[0].clientY);
+    }, { passive: true });
+    document.addEventListener('touchmove', (e) => {
+      onMove(e.touches[0].clientX, e.touches[0].clientY);
+    }, { passive: true });
+    document.addEventListener('touchend', onEnd);
+  </script>
+</body>
+</html>

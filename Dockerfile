@@ -5,6 +5,9 @@ RUN sudo apt-get update \
     && sudo apt-get install -y --no-install-recommends \
         make \
         build-essential \
+        pkg-config \
+        libgmp-dev \
+        linux-libc-dev \
     && sudo rm -rf /var/lib/apt/lists/*
 
 # Install Rocq and clean up the opam cache

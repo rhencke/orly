@@ -16,6 +16,7 @@ rocq-build:
 	rocq compile -Q theories Hello theories/BspTexture.v
 	rocq compile -Q theories Hello theories/BspBrush.v
 	rocq compile -Q theories Hello theories/BspLightmapVisEffect.v
+	rocq compile -Q theories Hello theories/BspEntity.v
 
 ocaml-build: rocq-build
 	dune build extract_assets/main.exe

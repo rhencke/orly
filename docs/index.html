@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>orly — Rocq in the browser</title>
+
+  <!--
+    coi-serviceworker: patches COOP/COEP headers via a service worker so
+    JsCoq's SharedArrayBuffer-based workers function on GitHub Pages, which
+    does not send these headers from the origin server.
+    Source: https://github.com/gzuidhof/coi-serviceworker (MIT)
+  -->
+  <script src="coi-serviceworker.js"></script>
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: system-ui, sans-serif;
+      background: #0d0d0d;
+      color: #e0e0e0;
+      display: flex;
+      flex-direction: column;
+      height: 100dvh;
+      overflow: hidden;
+    }
+
+    /* ── header ─────────────────────────────────────────────── */
+    #orly-header {
+      flex: 0 0 auto;
+      padding: 0.4rem 1rem;
+      background: #1a1a2e;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      border-bottom: 1px solid #2a2a4e;
+    }
+    #orly-header h1 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      color: #a0c4ff;
+    }
+    #orly-header .subtitle {
+      font-size: 0.75rem;
+      color: #666;
+    }
+
+    /* ── main split ──────────────────────────────────────────── */
+    #main {
+      flex: 1 1 auto;
+      display: flex;
+      flex-direction: column;
+      min-height: 0; /* allow children to shrink */
+    }
+
+    /* ── game canvas ─────────────────────────────────────────── */
+    #game-surface {
+      flex: 1 1 auto;
+      position: relative;
+      background: #000;
+      min-height: 0;
+    }
+    #game-canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      /* canvas intrinsic size is set by JS; CSS fills the container */
+    }
+    #game-placeholder {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: #333;
+      font-size: 0.85rem;
+      pointer-events: none;
+      gap: 0.4rem;
+    }
+    #game-placeholder .label {
+      font-size: 1.5rem;
+      color: #222;
+    }
+
+    /* ── JsCoq IDE panel ─────────────────────────────────────── */
+    #jscoq-panel {
+      flex: 0 0 40vh;
+      min-height: 120px;
+      max-height: 60vh;
+      overflow: hidden;
+      border-top: 2px solid #2a2a4e;
+      background: #fff; /* JsCoq ships a light-theme IDE */
+      position: relative;
+    }
+
+    /* JsCoq uses its own internal layout — let it fill the panel */
+    #ide-wrapper {
+      width: 100%;
+      height: 100%;
+    }
+
+    /* ── touch-friendly resize handle ───────────────────────── */
+    #resize-handle {
+      flex: 0 0 6px;
+      background: #2a2a4e;
+      cursor: ns-resize;
+      touch-action: none;
+    }
+    #resize-handle:hover { background: #a0c4ff; }
+  </style>
+</head>
+<body>
+  <header id="orly-header">
+    <h1>orly</h1>
+    <span class="subtitle">Rocq · JsCoq · browser</span>
+  </header>
+
+  <div id="main">
+    <!-- ── game canvas (Quake rendering target: issues #15, #16) ── -->
+    <div id="game-surface">
+      <canvas id="game-canvas" aria-label="Game surface"></canvas>
+      <div id="game-placeholder">
+        <span class="label">[ game canvas ]</span>
+        <span>Quake rendering target — coming in <a href="https://github.com/rhencke/orly/issues/15" style="color:#444">#15</a></span>
+      </div>
+    </div>
+
+    <!-- touch-friendly drag handle to resize the two panels -->
+    <div id="resize-handle" role="separator" aria-label="Drag to resize"></div>
+
+    <!-- ── JsCoq IDE panel ── -->
+    <div id="jscoq-panel">
+      <div id="ide-wrapper" class="toggled">
+        <div id="code-wrapper">
+          <div id="document">
+            <textarea class="coq-code">
+(** * Hello, Rocq!
+
+    A minimal Rocq program with proof-based verification. *)
+
+Require Import Strings.String.
+Open Scope string_scope.
+
+(** A greeting function. *)
+Definition hello (name : string) : string :=
+  "Hello, " ++ name ++ "!".
+
+(** [hello "world"] produces ["Hello, world!"]. *)
+Theorem hello_world : hello "world" = "Hello, world!".
+Proof.
+  reflexivity.
+Qed.
+            </textarea>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    // ── JsCoq bootstrap ─────────────────────────────────────────
+    // Loaded from jsDelivr CDN. base_path points to the same CDN origin
+    // so JsCoq can resolve its worker scripts and Coq package bundles.
+    const JSCOQ_CDN = 'https://cdn.jsdelivr.net/npm/jscoq@0.17.1/';
+
+    import { JsCoq } from 'https://cdn.jsdelivr.net/npm/jscoq@0.17.1/jscoq.js';
+
+    JsCoq.start(
+      JSCOQ_CDN,
+      ['.coq-code'],
+      {
+        prelude:       true,
+        implicit_libs: true,
+        editor:        { mode: { 'company-coq': true } },
+        init_pkgs:     ['init'],
+        all_pkgs:      ['coq'],
+      }
+    );
+
+    // ── game canvas sizing ───────────────────────────────────────
+    // Keep the canvas pixel dimensions in sync with its CSS layout size
+    // so future renderers get a correctly sized drawing surface.
+    const canvas = document.getElementById('game-canvas');
+    const ro = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect;
+      canvas.width  = Math.round(width);
+      canvas.height = Math.round(height);
+    });
+    ro.observe(canvas.parentElement);
+
+    // ── drag-to-resize handle ────────────────────────────────────
+    const handle     = document.getElementById('resize-handle');
+    const jscoqPanel = document.getElementById('jscoq-panel');
+    let dragging = false, startY = 0, startH = 0;
+
+    const onStart = (y) => { dragging = true; startY = y; startH = jscoqPanel.offsetHeight; };
+    const onMove  = (y) => {
+      if (!dragging) return;
+      const delta = startY - y;
+      const next  = Math.max(120, Math.min(window.innerHeight * 0.8, startH + delta));
+      jscoqPanel.style.flex = `0 0 ${next}px`;
+    };
+    const onEnd   = () => { dragging = false; };
+
+    handle.addEventListener('mousedown',  (e) => onStart(e.clientY));
+    document.addEventListener('mousemove', (e) => onMove(e.clientY));
+    document.addEventListener('mouseup',   onEnd);
+
+    handle.addEventListener('touchstart',  (e) => onStart(e.touches[0].clientY), { passive: true });
+    document.addEventListener('touchmove', (e) => onMove(e.touches[0].clientY),  { passive: true });
+    document.addEventListener('touchend',  onEnd);
+  </script>
+</body>
+</html>

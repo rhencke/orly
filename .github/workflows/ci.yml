@@ -12,8 +12,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build container image
-        run: docker build -t ghcr.io/rhencke/orly:latest .
+      - name: Pull container image
+        run: docker pull ghcr.io/rhencke/orly:latest
 
       - name: Verify proofs
         run: docker run --rm -v "$PWD:/src:ro" ghcr.io/rhencke/orly:latest sh -c "cp -r /src /tmp/work && cd /tmp/work && opam exec -- make test"

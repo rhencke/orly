@@ -300,12 +300,59 @@ Qed.
       showStatus(`Error: ${msg}`, 'error');
     });
 
+    // ── asset loader ─────────────────────────────────────────────
+    //
+    // Loads game assets produced by `make assets`.  Fetches
+    // assets/manifest.json first to discover what files are available,
+    // then retrieves each as an ArrayBuffer using parallel fetches.
+    //
+    // Returns a Map<string, ArrayBuffer> keyed by relative asset path
+    // (e.g. "maps/q3dm1.bsp").  The renderer (issue #15) reads from
+    // window.orlyAssets at draw time.
+    //
+    // Graceful degradation: a missing manifest (HTTP 404) just means the
+    // assets have not been extracted yet — normal on GitHub Pages (EULA
+    // prohibits hosting extracted files) and in fresh checkouts.  The
+    // function returns an empty Map without surfacing a user-visible error.
+    async function loadAssets() {
+      let manifest;
+      try {
+        const resp = await fetch('assets/manifest.json');
+        if (resp.status === 404) return new Map();
+        if (!resp.ok) throw new Error(`manifest fetch failed: HTTP ${resp.status}`);
+        manifest = await resp.json();
+      } catch (err) {
+        // Network-level failure (offline, file:// origin, CORS) — not fatal.
+        if (err instanceof TypeError) return new Map();
+        throw err;
+      }
+
+      if (!Array.isArray(manifest) || manifest.length === 0) return new Map();
+
+      const total = manifest.length;
+      const assets = new Map();
+      let loaded = 0;
+
+      showStatus(`Loading assets: 0 / ${total}`);
+
+      // Fetch all files in parallel; update the counter as each completes.
+      await Promise.all(manifest.map(async (path) => {
+        const resp = await fetch(`assets/${path}`);
+        if (!resp.ok) throw new Error(`${path}: HTTP ${resp.status}`);
+        assets.set(path, await resp.arrayBuffer());
+        showStatus(`Loading assets: ${++loaded} / ${total}`);
+      }));
+
+      return assets;
+    }
+
     // ── JsCoq bootstrap ─────────────────────────────────────────
     // Loaded from jsDelivr CDN. Uses dynamic import so we can catch
     // network failures and surface them in the status bar instead of
     // silently failing (a static import failure kills the whole module).
     const JSCOQ_CDN = 'https://cdn.jsdelivr.net/npm/jscoq@0.17.1/';
 
+    let jscoqOk = false;
     showStatus('Loading JsCoq…');
     try {
       const { JsCoq } = await import('https://cdn.jsdelivr.net/npm/jscoq@0.17.1/jscoq.js');
@@ -321,10 +368,27 @@ Qed.
           all_pkgs:      ['coq'],
         }
       );
-      clearStatus();
+      jscoqOk = true;
     } catch (err) {
       showStatus(`Failed to load JsCoq: ${err.message}`, 'error');
       console.error('JsCoq bootstrap failed:', err);
+    }
+
+    // ── asset loading ────────────────────────────────────────────
+    // Runs after JsCoq.start() is called; the Rocq kernel boots
+    // asynchronously in the background while we fetch game data.
+    // Only updates the status bar when JsCoq is healthy — a JsCoq
+    // failure leaves its error message visible rather than overwriting
+    // it with asset progress.
+    try {
+      window.orlyAssets = await loadAssets();
+      if (window.orlyAssets.size > 0)
+        console.log(`orly: loaded ${window.orlyAssets.size} game assets`);
+      if (jscoqOk) clearStatus();
+    } catch (err) {
+      console.error('Asset loading failed:', err);
+      window.orlyAssets = new Map();
+      if (jscoqOk) showStatus(`Failed to load assets: ${err.message}`, 'error');
     }
 
     // ── game canvas sizing ───────────────────────────────────────

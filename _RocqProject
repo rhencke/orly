@@ -7,3 +7,4 @@ theories/BspFormat.v
 theories/BspPlaneVertex.v
 theories/BspNodeLeaf.v
 theories/BspTexture.v
+theories/BspBrush.v

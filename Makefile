@@ -14,6 +14,7 @@ THEORIES := \
   theories/BspNodeLeaf.v \
   theories/BspTexture.v \
   theories/BspBrush.v \
+  theories/BspFace.v \
   theories/BspLightmapVisEffect.v \
   theories/BspEntity.v \
   theories/BspFile.v \

@@ -6,8 +6,8 @@
     [None] on any parse failure.
 
     Lumps with dedicated typed parsers are stored as typed lists.
-    Lumps without a typed parser yet (faces, light-volumes) are stored
-    as raw byte slices so no data is lost. *)
+    Lumps without a typed parser yet (light-volumes) are stored as raw
+    byte slices so no data is lost. *)
 
 From Stdlib Require Import List.
 From Stdlib Require Import ZArith.
@@ -18,6 +18,7 @@ From Bsp Require Import BspPlaneVertex.
 From Bsp Require Import BspNodeLeaf.
 From Bsp Require Import BspTexture.
 From Bsp Require Import BspBrush.
+From Bsp Require Import BspFace.
 From Bsp Require Import BspLightmapVisEffect.
 From Bsp Require Import BspEntity.
 Import ListNotations.
@@ -73,7 +74,7 @@ Record bsp_file : Type := mk_bsp_file
   ; bf_vertexes    : list bsp_vertex
   ; bf_mesh_verts  : list Z
   ; bf_effects     : list bsp_effect
-  ; bf_faces       : list Z           (** raw bytes -- typed parser pending *)
+  ; bf_faces       : list bsp_face
   ; bf_lightmaps   : list bsp_lightmap
   ; bf_light_vols  : list Z           (** raw bytes -- typed parser pending *)
   ; bf_vis_data    : option bsp_vis_data
@@ -130,14 +131,14 @@ Definition parse_bsp_file (bs : bytes) : option bsp_file :=
             parse_vertex_lump    bs (off e_vtx) (cnt e_vtx bsp_vertex_size),
             parse_i32_lump       bs (off e_mvt) (cnt e_mvt 4%nat),
             parse_effect_lump    bs (off e_efx) (cnt e_efx bsp_effect_size),
-            slice                bs (off e_fac) (len e_fac),
+            parse_face_lump      bs (off e_fac) (cnt e_fac bsp_face_size),
             parse_lightmap_lump  bs (off e_lmp) (cnt e_lmp bsp_lightmap_size),
             slice                bs (off e_lvl) (len e_lvl) with
       | Some textures,  Some planes,     Some nodes,
         Some leaves,    Some leaf_faces, Some leaf_brushes,
         Some models,    Some brushes,    Some brush_sides,
         Some vertexes,  Some mesh_verts, Some effects,
-        Some faces_raw, Some lightmaps,  Some lvols_raw =>
+        Some faces,     Some lightmaps,  Some lvols_raw =>
           (* vis data: optional -- zero-length lump is valid *)
           let vis :=
             if (len e_vis =? 0)%nat then Some None
@@ -151,7 +152,7 @@ Definition parse_bsp_file (bs : bytes) : option bsp_file :=
                                 leaves leaf_faces leaf_brushes
                                 models brushes brush_sides
                                 vertexes mesh_verts effects
-                                faces_raw lightmaps lvols_raw vis_opt)
+                                faces lightmaps lvols_raw vis_opt)
           | None => None
           end
       | _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ => None

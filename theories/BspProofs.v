@@ -30,6 +30,7 @@ From Bsp Require Import BspPlaneVertex.
 From Bsp Require Import BspNodeLeaf.
 From Bsp Require Import BspTexture.
 From Bsp Require Import BspBrush.
+From Bsp Require Import BspFace.
 From Bsp Require Import BspLightmapVisEffect.
 From Bsp Require Import BspEntity.
 From Bsp Require Import BspFile.
@@ -357,6 +358,13 @@ Proof.
     intros; reflexivity.
 Qed.
 
+Theorem parse_face_lump_length : forall bs off count fs,
+  parse_face_lump bs off count = Some fs -> length fs = count.
+Proof.
+  apply (lump_length_generic parse_bsp_face bsp_face_size);
+    intros; reflexivity.
+Qed.
+
 Theorem parse_model_lump_length : forall bs off count ms,
   parse_model_lump bs off count = Some ms -> length ms = count.
 Proof.
@@ -557,6 +565,47 @@ Definition leaves_brushes_valid (f : bsp_file) : bool :=
     (lf_first_leaf_brush l + lf_num_leaf_brushes l <=? nb))
     (bf_leaves f).
 
+(** All face texture indices reference valid textures. *)
+Definition faces_textures_valid (f : bsp_file) : bool :=
+  let nt := Z.of_nat (length (bf_textures f)) in
+  forallb (fun fc =>
+    (0 <=? fc_texture fc) && (fc_texture fc <? nt))
+    (bf_faces f).
+
+(** All face effect indices reference valid effects, or are -1 (none). *)
+Definition faces_effects_valid (f : bsp_file) : bool :=
+  let ne := Z.of_nat (length (bf_effects f)) in
+  forallb (fun fc =>
+    (fc_effect fc =? -1) ||
+    ((0 <=? fc_effect fc) && (fc_effect fc <? ne)))
+    (bf_faces f).
+
+(** All face vertex-ranges stay within the vertexes lump. *)
+Definition faces_vertexes_valid (f : bsp_file) : bool :=
+  let nv := Z.of_nat (length (bf_vertexes f)) in
+  forallb (fun fc =>
+    (0 <=? fc_vertex fc) &&
+    (0 <=? fc_n_vertexes fc) &&
+    (fc_vertex fc + fc_n_vertexes fc <=? nv))
+    (bf_faces f).
+
+(** All face mesh-vertex-ranges stay within the mesh-verts lump. *)
+Definition faces_meshverts_valid (f : bsp_file) : bool :=
+  let nm := Z.of_nat (length (bf_mesh_verts f)) in
+  forallb (fun fc =>
+    (0 <=? fc_meshvert fc) &&
+    (0 <=? fc_n_meshverts fc) &&
+    (fc_meshvert fc + fc_n_meshverts fc <=? nm))
+    (bf_faces f).
+
+(** All face lightmap indices reference valid lightmaps, or are -1 (none). *)
+Definition faces_lightmaps_valid (f : bsp_file) : bool :=
+  let nl := Z.of_nat (length (bf_lightmaps f)) in
+  forallb (fun fc =>
+    (fc_lm_index fc =? -1) ||
+    ((0 <=? fc_lm_index fc) && (fc_lm_index fc <? nl)))
+    (bf_faces f).
+
 (** All model face-ranges are non-negative. *)
 Definition models_faces_valid (f : bsp_file) : bool :=
   forallb (fun m =>
@@ -583,6 +632,11 @@ Definition bsp_cross_lump_valid (f : bsp_file) : bool :=
   brushes_textures_valid f &&
   brushes_sides_valid f &&
   effects_brushes_valid f &&
+  faces_textures_valid f &&
+  faces_effects_valid f &&
+  faces_vertexes_valid f &&
+  faces_meshverts_valid f &&
+  faces_lightmaps_valid f &&
   leaves_faces_valid f &&
   leaves_brushes_valid f &&
   models_faces_valid f &&
@@ -601,7 +655,7 @@ Local Ltac reflect_andb2 :=
   intros f Hv x Hin;
   unfold nodes_planes_valid, brush_sides_planes_valid,
          brush_sides_textures_valid, brushes_textures_valid,
-         effects_brushes_valid in Hv;
+         effects_brushes_valid, faces_textures_valid in Hv;
   rewrite forallb_forall in Hv;
   specialize (Hv x Hin);
   rewrite Bool.andb_true_iff in Hv;
@@ -639,6 +693,12 @@ Theorem effects_brushes_valid_correct : forall f,
   0 <= fx_brush_index e < Z.of_nat (length (bf_brushes f)).
 Proof. reflect_andb2. Qed.
 
+Theorem faces_textures_valid_correct : forall f,
+  faces_textures_valid f = true ->
+  forall fc, In fc (bf_faces f) ->
+  0 <= fc_texture fc < Z.of_nat (length (bf_textures f)).
+Proof. reflect_andb2. Qed.
+
 (** Helper: reflect a three-conjunct range-check boolean into [Prop]. *)
 Local Ltac reflect_range3 unfold_name :=
   intros f Hv x Hin;
@@ -652,6 +712,35 @@ Local Ltac reflect_range3 unfold_name :=
   | apply Z.leb_le; exact Hnum
   | apply Z.leb_le; exact Hsum ].
 
+(** Helper: reflect an optional-index boolean check (value = -1 or
+    0 <= value < bound) into [Prop]. *)
+Local Ltac reflect_optional unfold_name field :=
+  intros f Hv x Hin;
+  unfold unfold_name in Hv;
+  rewrite forallb_forall in Hv;
+  specialize (Hv x Hin);
+  rewrite Bool.orb_true_iff in Hv;
+  destruct Hv as [Heq | Hrange];
+  [ left; apply Z.eqb_eq; exact Heq
+  | right; rewrite Bool.andb_true_iff in Hrange;
+    destruct Hrange as [Hle Hlt];
+    split; [ apply Z.leb_le; exact Hle
+           | apply Z.ltb_lt; exact Hlt ] ].
+
+Theorem faces_effects_valid_correct : forall f,
+  faces_effects_valid f = true ->
+  forall fc, In fc (bf_faces f) ->
+  fc_effect fc = -1 \/
+  0 <= fc_effect fc < Z.of_nat (length (bf_effects f)).
+Proof. reflect_optional faces_effects_valid fc_effect. Qed.
+
+Theorem faces_lightmaps_valid_correct : forall f,
+  faces_lightmaps_valid f = true ->
+  forall fc, In fc (bf_faces f) ->
+  fc_lm_index fc = -1 \/
+  0 <= fc_lm_index fc < Z.of_nat (length (bf_lightmaps f)).
+Proof. reflect_optional faces_lightmaps_valid fc_lm_index. Qed.
+
 Theorem brushes_sides_valid_correct : forall f,
   brushes_sides_valid f = true ->
   forall b, In b (bf_brushes f) ->
@@ -660,6 +749,24 @@ Theorem brushes_sides_valid_correct : forall f,
   br_first_side b + br_num_sides b <=
     Z.of_nat (length (bf_brush_sides f)).
 Proof. reflect_range3 brushes_sides_valid. Qed.
+
+Theorem faces_vertexes_valid_correct : forall f,
+  faces_vertexes_valid f = true ->
+  forall fc, In fc (bf_faces f) ->
+  0 <= fc_vertex fc /\
+  0 <= fc_n_vertexes fc /\
+  fc_vertex fc + fc_n_vertexes fc <=
+    Z.of_nat (length (bf_vertexes f)).
+Proof. reflect_range3 faces_vertexes_valid. Qed.
+
+Theorem faces_meshverts_valid_correct : forall f,
+  faces_meshverts_valid f = true ->
+  forall fc, In fc (bf_faces f) ->
+  0 <= fc_meshvert fc /\
+  0 <= fc_n_meshverts fc /\
+  fc_meshvert fc + fc_n_meshverts fc <=
+    Z.of_nat (length (bf_mesh_verts f)).
+Proof. reflect_range3 faces_meshverts_valid. Qed.
 
 Theorem leaves_faces_valid_correct : forall f,
   leaves_faces_valid f = true ->
@@ -701,14 +808,38 @@ Theorem bsp_cross_lump_valid_sound : forall f,
   (forall b, In b (bf_brushes f) ->
      0 <= br_texture_index b < Z.of_nat (length (bf_textures f))) /\
   (forall e, In e (bf_effects f) ->
-     0 <= fx_brush_index e < Z.of_nat (length (bf_brushes f))).
+     0 <= fx_brush_index e < Z.of_nat (length (bf_brushes f))) /\
+  (forall fc, In fc (bf_faces f) ->
+     0 <= fc_texture fc < Z.of_nat (length (bf_textures f))) /\
+  (forall fc, In fc (bf_faces f) ->
+     fc_effect fc = -1 \/
+     0 <= fc_effect fc < Z.of_nat (length (bf_effects f))) /\
+  (forall fc, In fc (bf_faces f) ->
+     0 <= fc_vertex fc /\
+     0 <= fc_n_vertexes fc /\
+     fc_vertex fc + fc_n_vertexes fc <=
+       Z.of_nat (length (bf_vertexes f))) /\
+  (forall fc, In fc (bf_faces f) ->
+     0 <= fc_meshvert fc /\
+     0 <= fc_n_meshverts fc /\
+     fc_meshvert fc + fc_n_meshverts fc <=
+       Z.of_nat (length (bf_mesh_verts f))) /\
+  (forall fc, In fc (bf_faces f) ->
+     fc_lm_index fc = -1 \/
+     0 <= fc_lm_index fc < Z.of_nat (length (bf_lightmaps f))).
 Proof.
   intros f Hv. unfold bsp_cross_lump_valid in Hv.
   repeat rewrite Bool.andb_true_iff in Hv.
-  destruct Hv as [[[[[[[[[Hn Hbsp] Hbst] Hbt] Hbs] Heb] _] _] _] _].
+  destruct Hv as [[[[[[[[[[[[[[Hn Hbsp] Hbst] Hbt] Hbs] Heb]
+    Hft] Hfe] Hfv] Hfm] Hfl] _] _] _] _].
   exact (conj (nodes_planes_valid_correct f Hn)
         (conj (brush_sides_planes_valid_correct f Hbsp)
         (conj (brush_sides_textures_valid_correct f Hbst)
         (conj (brushes_textures_valid_correct f Hbt)
-              (effects_brushes_valid_correct f Heb))))).
+        (conj (effects_brushes_valid_correct f Heb)
+        (conj (faces_textures_valid_correct f Hft)
+        (conj (faces_effects_valid_correct f Hfe)
+        (conj (faces_vertexes_valid_correct f Hfv)
+        (conj (faces_meshverts_valid_correct f Hfm)
+              (faces_lightmaps_valid_correct f Hfl)))))))))).
 Qed.

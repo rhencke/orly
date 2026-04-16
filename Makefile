@@ -1,4 +1,4 @@
-.PHONY: build test clean serve assets rocq-build ocaml-build
+.PHONY: build test clean serve assets rocq-build ocaml-build validate-build validate
 
 # Path to the Q3 Arena Demo installer or pak0.pk3.
 # Set on the command line: make assets DEMO=/path/to/Q3ADemo.exe
@@ -6,20 +6,40 @@ DEMO ?=
 
 EXTRACT_BIN = _build/default/extract_assets/main.exe
 
+THEORIES := \
+  theories/ExtractAssets.v \
+  theories/BspBinary.v \
+  theories/BspFormat.v \
+  theories/BspPlaneVertex.v \
+  theories/BspNodeLeaf.v \
+  theories/BspTexture.v \
+  theories/BspBrush.v \
+  theories/BspLightmapVisEffect.v \
+  theories/BspEntity.v \
+  theories/BspFile.v \
+  theories/BspProofs.v \
+  theories/ExtractBsp.v
+
 rocq-build:
-	rocq compile -Q theories Hello theories/Hello.v
-	rocq compile -Q theories Hello theories/ExtractAssets.v
+	$(foreach v,$(THEORIES),rocq compile -Q theories Bsp $(v) &&) true
+
+validate-build: rocq-build
+	dune build validate_bsp/main.exe
+
+validate: validate-build
+	dune exec validate_bsp/main.exe
 
 ocaml-build: rocq-build
 	dune build extract_assets/main.exe
 
-build: rocq-build ocaml-build
+build: rocq-build validate-build
 
-test: build
+test: build validate
 
 clean:
 	rm -f theories/*.vo theories/*.vok theories/*.vos theories/*.glob theories/.*.aux
 	rm -f extract_assets/extract_assets_core.ml extract_assets/extract_assets_core.mli
+	rm -f validate_bsp/bsp_core.ml validate_bsp/bsp_core.mli
 	dune clean
 
 assets: ocaml-build

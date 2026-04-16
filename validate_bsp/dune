@@ -1,0 +1,5 @@
+(executable
+ (name main)
+ (libraries unix)
+ (ocamlopt_flags (:standard -w -39))
+ (ocamlc_flags   (:standard -w -39)))

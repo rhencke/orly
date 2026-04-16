@@ -1,7 +1,9 @@
 // ── WebGL renderer for Q3 BSP face geometry with lightmaps ───────
 //
-// Consumes the parsed BSP data from bsp.js and draws polygon (type 1)
-// and mesh (type 3) faces with lightmap-modulated vertex colors.
+// Consumes the parsed BSP data from bsp.js and draws polygon (type 1),
+// bezier patch (type 2), and mesh (type 3) faces with lightmap-
+// modulated vertex colors.  Patches are tessellated at load time by
+// patches.js and merged into the same vertex/index buffers.
 //
 // Usage:
 //   import { createRenderer } from './renderer.js';
@@ -12,7 +14,8 @@
 // Coordinate system: Q3 is right-handed Z-up. We pass vertices
 // through unmodified — the view matrix handles the conversion.
 
-import { FACE_POLYGON, FACE_MESH } from './bsp.js';
+import { FACE_POLYGON, FACE_MESH, isVisibleTexture } from './bsp.js';
+import { tessellatePatches } from './patches.js';
 
 // ── shader sources ───────────────────────────────────────────────────
 
@@ -83,23 +86,11 @@ function linkProgram(gl, vs, fs) {
 }
 
 // ── surface filtering ────────────────────────────────────────────────
-//
-// Q3 content/surface flags that indicate non-renderable geometry.
-
-const CONTENTS_PLAYERCLIP  = 0x10000;
-const CONTENTS_MONSTERCLIP = 0x20000;
-const SURF_NODRAW = 0x80;
-const SURF_SKY    = 0x4;
 
 function shouldDrawFace(face, textures) {
   if (face.type !== FACE_POLYGON && face.type !== FACE_MESH) return false;
   if (face.nMeshverts === 0) return false;
-  const tex = textures[face.texture];
-  if (!tex) return false;
-  if (tex.name === '' || tex.name === 'noshader') return false;
-  if (tex.flags & (SURF_NODRAW | SURF_SKY)) return false;
-  if (tex.contents & (CONTENTS_PLAYERCLIP | CONTENTS_MONSTERCLIP)) return false;
-  return true;
+  return isVisibleTexture(textures[face.texture]);
 }
 
 // ── vertex buffer packing ────────────────────────────────────────────
@@ -112,14 +103,14 @@ function shouldDrawFace(face, textures) {
 
 const VERTEX_STRIDE = 32;
 
-function buildVertexBuffer(gl, bsp) {
-  const n = bsp.vertices.length;
+function buildVertexBuffer(gl, vertices) {
+  const n = vertices.length;
   const buf = new ArrayBuffer(n * VERTEX_STRIDE);
   const f32 = new Float32Array(buf);
   const u8  = new Uint8Array(buf);
 
   for (let i = 0; i < n; i++) {
-    const v = bsp.vertices[i];
+    const v = vertices[i];
     const fOff = i * 8; // 32 / 4 = 8 floats per vertex
     f32[fOff + 0] = v.posX;
     f32[fOff + 1] = v.posY;
@@ -146,7 +137,7 @@ function buildVertexBuffer(gl, bsp) {
 // Group faces by lightmap index so we can batch draw calls.
 // Returns { ibo, groups: [{ lmIndex, start, count }], indexType, indexSize }.
 
-function buildIndexBuffer(gl, bsp) {
+function buildIndexBuffer(gl, bsp, patchGroupMap, totalVertexCount) {
   const { faces, meshVerts, textures } = bsp;
 
   // First pass: count total indices and group by lightmap
@@ -164,12 +155,19 @@ function buildIndexBuffer(gl, bsp) {
     }
   }
 
+  // Merge tessellated bezier patch indices into the same lightmap groups
+  for (const [lmIdx, patchIndices] of patchGroupMap) {
+    if (!groupMap.has(lmIdx)) groupMap.set(lmIdx, []);
+    const arr = groupMap.get(lmIdx);
+    for (const idx of patchIndices) arr.push(idx);
+  }
+
   // Flatten groups into a single index array, recording start/count
   let totalIndices = 0;
   for (const arr of groupMap.values()) totalIndices += arr.length;
 
-  // Choose index type based on vertex count
-  const needU32 = bsp.vertices.length > 65535;
+  // Choose index type based on total vertex count (BSP + tessellated patches)
+  const needU32 = totalVertexCount > 65535;
   if (needU32) {
     const ext = gl.getExtension('OES_element_index_uint');
     if (!ext) throw new Error('OES_element_index_uint not supported');
@@ -343,9 +341,14 @@ export function createRenderer(canvas, bsp) {
   const uProj     = gl.getUniformLocation(program, 'u_proj');
   const uLightmap = gl.getUniformLocation(program, 'u_lightmap');
 
+  // ── tessellate bezier patches ───────────────────────────────────
+  const patches = tessellatePatches(bsp);
+  const allVertices = bsp.vertices.concat(patches.vertices);
+
   // ── build GPU buffers ────────────────────────────────────────────
-  const vbo = buildVertexBuffer(gl, bsp);
-  const { ibo, groups, indexType, indexSize } = buildIndexBuffer(gl, bsp);
+  const vbo = buildVertexBuffer(gl, allVertices);
+  const { ibo, groups, indexType, indexSize } =
+    buildIndexBuffer(gl, bsp, patches.groupMap, allVertices.length);
   const lm = uploadLightmaps(gl, bsp);
 
   // ── GL state ─────────────────────────────────────────────────────

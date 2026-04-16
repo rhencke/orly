@@ -30,6 +30,7 @@ From Bsp Require Import BspPlaneVertex.
 From Bsp Require Import BspNodeLeaf.
 From Bsp Require Import BspTexture.
 From Bsp Require Import BspBrush.
+From Bsp Require Import BspFace.
 From Bsp Require Import BspLightmapVisEffect.
 From Bsp Require Import BspEntity.
 From Bsp Require Import BspFile.
@@ -354,6 +355,13 @@ Theorem parse_effect_lump_length : forall bs off count es,
   parse_effect_lump bs off count = Some es -> length es = count.
 Proof.
   apply (lump_length_generic parse_bsp_effect bsp_effect_size);
+    intros; reflexivity.
+Qed.
+
+Theorem parse_face_lump_length : forall bs off count fs,
+  parse_face_lump bs off count = Some fs -> length fs = count.
+Proof.
+  apply (lump_length_generic parse_bsp_face bsp_face_size);
     intros; reflexivity.
 Qed.
 

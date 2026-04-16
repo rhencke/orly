@@ -11,3 +11,4 @@ theories/BspLightmapVisEffect.v
 theories/BspEntity.v
 theories/BspFile.v
 theories/BspProofs.v
+theories/ExtractBsp.v

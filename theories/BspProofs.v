@@ -109,6 +109,137 @@ Proof.
 Qed.
 
 (* ================================================================== *)
+(** * Binary serialize–parse round-trip                                 *)
+(* ================================================================== *)
+
+(** ** Unsigned 32-bit *)
+
+(** Serialize a non-negative [Z] as four little-endian bytes.
+    This is the inverse of [get_u32_le]. *)
+Definition serialize_u32_le (v : Z) : list Z :=
+  [ v mod 256
+  ; (v / 256) mod 256
+  ; (v / 65536) mod 256
+  ; (v / 16777216) mod 256
+  ].
+
+(** Four concrete list elements at offset 0 reassemble via the
+    standard little-endian formula. *)
+Lemma get_u32_le_list4 : forall b0 b1 b2 b3,
+  get_u32_le [b0; b1; b2; b3] 0 =
+    Some (b0 + b1 * 256 + b2 * 65536 + b3 * 16777216).
+Proof. intros. reflexivity. Qed.
+
+(** Four-byte base-256 decomposition identity. *)
+Lemma base256_u32 : forall v,
+  0 <= v < 4294967296 ->
+  v mod 256 + (v / 256 mod 256) * 256 +
+  (v / 65536 mod 256) * 65536 +
+  (v / 16777216 mod 256) * 16777216 = v.
+Proof.
+  intros v Hv.
+  pose proof (Z.mod_eq v 256 ltac:(lia)) as E0.
+  pose proof (Z.mod_eq (v / 256) 256 ltac:(lia)) as E1.
+  pose proof (Z.mod_eq (v / 65536) 256 ltac:(lia)) as E2.
+  assert (v / 256 / 256 = v / 65536) as D1.
+  { replace 65536 with (256 * 256) by lia.
+    apply Z.div_div; lia. }
+  assert (v / 65536 / 256 = v / 16777216) as D2.
+  { replace 16777216 with (65536 * 256) by lia.
+    apply Z.div_div; lia. }
+  assert (0 <= v / 16777216 < 256) as R3.
+  { split;
+    [ apply Z.div_pos; lia
+    | apply Z.div_lt_upper_bound; lia ]. }
+  pose proof (Z.mod_small _ _ R3) as E3.
+  lia.
+Qed.
+
+(** Parsing the serialized form of a u32 recovers the original value. *)
+Theorem u32_roundtrip : forall v,
+  0 <= v < 4294967296 ->
+  get_u32_le (serialize_u32_le v) 0 = Some v.
+Proof.
+  intros v Hv.
+  unfold serialize_u32_le. rewrite get_u32_le_list4.
+  f_equal. apply base256_u32. exact Hv.
+Qed.
+
+(** ** Signed 32-bit *)
+
+(** Convert a signed i32 value to its unsigned representation. *)
+Definition from_i32 (v : Z) : Z :=
+  if v <? 0 then v + 4294967296 else v.
+
+(** Serialize a signed i32 via its unsigned representation. *)
+Definition serialize_i32_le (v : Z) : list Z :=
+  serialize_u32_le (from_i32 v).
+
+(** [from_i32] maps valid signed values to valid unsigned values. *)
+Lemma from_i32_range : forall v,
+  -2147483648 <= v <= 2147483647 ->
+  0 <= from_i32 v < 4294967296.
+Proof.
+  intros v Hv. unfold from_i32.
+  destruct (v <? 0) eqn:E;
+  [ apply Z.ltb_lt in E | apply Z.ltb_ge in E ]; lia.
+Qed.
+
+(** [to_i32] inverts [from_i32] on valid signed values. *)
+Lemma to_i32_from_i32 : forall v,
+  -2147483648 <= v <= 2147483647 ->
+  to_i32 (from_i32 v) = v.
+Proof.
+  intros v Hv. unfold to_i32, from_i32.
+  destruct (v <? 0) eqn:E1;
+  [ apply Z.ltb_lt in E1;
+    destruct (Z.leb_spec 2147483648 (v + 4294967296)); lia
+  | apply Z.ltb_ge in E1;
+    destruct (Z.leb_spec 2147483648 v); lia ].
+Qed.
+
+(** Parsing the serialized form of an i32 recovers the original value. *)
+Theorem i32_roundtrip : forall v,
+  -2147483648 <= v <= 2147483647 ->
+  get_i32_le (serialize_i32_le v) 0 = Some v.
+Proof.
+  intros v Hv.
+  unfold get_i32_le, serialize_i32_le.
+  rewrite u32_roundtrip by (apply from_i32_range; exact Hv).
+  simpl. f_equal. apply to_i32_from_i32. exact Hv.
+Qed.
+
+(** ** Concrete round-trip examples *)
+
+Example u32_roundtrip_0 :
+  get_u32_le (serialize_u32_le 0) 0 = Some 0.
+Proof. vm_compute. reflexivity. Qed.
+
+Example u32_roundtrip_1 :
+  get_u32_le (serialize_u32_le 1) 0 = Some 1.
+Proof. vm_compute. reflexivity. Qed.
+
+Example u32_roundtrip_max :
+  get_u32_le (serialize_u32_le 4294967295) 0 = Some 4294967295.
+Proof. vm_compute. reflexivity. Qed.
+
+Example i32_roundtrip_0 :
+  get_i32_le (serialize_i32_le 0) 0 = Some 0.
+Proof. vm_compute. reflexivity. Qed.
+
+Example i32_roundtrip_neg1 :
+  get_i32_le (serialize_i32_le (-1)) 0 = Some (-1).
+Proof. vm_compute. reflexivity. Qed.
+
+Example i32_roundtrip_min :
+  get_i32_le (serialize_i32_le (-2147483648)) 0 = Some (-2147483648).
+Proof. vm_compute. reflexivity. Qed.
+
+Example i32_roundtrip_max :
+  get_i32_le (serialize_i32_le 2147483647) 0 = Some 2147483647.
+Proof. vm_compute. reflexivity. Qed.
+
+(* ================================================================== *)
 (** * LumpIndex properties                                              *)
 (* ================================================================== *)
 
@@ -456,3 +587,128 @@ Definition bsp_cross_lump_valid (f : bsp_file) : bool :=
   leaves_brushes_valid f &&
   models_faces_valid f &&
   models_brushes_valid f.
+
+(** ** Soundness: boolean predicates imply Prop-level guarantees
+
+    These theorems reflect the boolean decision procedures into
+    [Prop]-level statements — proof that "the checker said yes"
+    implies the property actually holds for every element.  The
+    proofs use [forallb_forall] plus standard boolean reflection
+    ([Z.leb_le], [Z.ltb_lt]). *)
+
+(** Helper: reflect a two-conjunct boolean check into [Prop]. *)
+Local Ltac reflect_andb2 :=
+  intros f Hv x Hin;
+  unfold nodes_planes_valid, brush_sides_planes_valid,
+         brush_sides_textures_valid, brushes_textures_valid,
+         effects_brushes_valid in Hv;
+  rewrite forallb_forall in Hv;
+  specialize (Hv x Hin);
+  rewrite Bool.andb_true_iff in Hv;
+  destruct Hv as [Hle Hlt];
+  split; [ apply Z.leb_le; exact Hle
+         | apply Z.ltb_lt; exact Hlt ].
+
+Theorem nodes_planes_valid_correct : forall f,
+  nodes_planes_valid f = true ->
+  forall n, In n (bf_nodes f) ->
+  0 <= nd_plane n < Z.of_nat (length (bf_planes f)).
+Proof. reflect_andb2. Qed.
+
+Theorem brush_sides_planes_valid_correct : forall f,
+  brush_sides_planes_valid f = true ->
+  forall s, In s (bf_brush_sides f) ->
+  0 <= bs_plane_index s < Z.of_nat (length (bf_planes f)).
+Proof. reflect_andb2. Qed.
+
+Theorem brush_sides_textures_valid_correct : forall f,
+  brush_sides_textures_valid f = true ->
+  forall s, In s (bf_brush_sides f) ->
+  0 <= bs_texture_index s < Z.of_nat (length (bf_textures f)).
+Proof. reflect_andb2. Qed.
+
+Theorem brushes_textures_valid_correct : forall f,
+  brushes_textures_valid f = true ->
+  forall b, In b (bf_brushes f) ->
+  0 <= br_texture_index b < Z.of_nat (length (bf_textures f)).
+Proof. reflect_andb2. Qed.
+
+Theorem effects_brushes_valid_correct : forall f,
+  effects_brushes_valid f = true ->
+  forall e, In e (bf_effects f) ->
+  0 <= fx_brush_index e < Z.of_nat (length (bf_brushes f)).
+Proof. reflect_andb2. Qed.
+
+(** Helper: reflect a three-conjunct range-check boolean into [Prop]. *)
+Local Ltac reflect_range3 unfold_name :=
+  intros f Hv x Hin;
+  unfold unfold_name in Hv;
+  rewrite forallb_forall in Hv;
+  specialize (Hv x Hin);
+  repeat rewrite Bool.andb_true_iff in Hv;
+  destruct Hv as [[Hfst Hnum] Hsum];
+  repeat split;
+  [ apply Z.leb_le; exact Hfst
+  | apply Z.leb_le; exact Hnum
+  | apply Z.leb_le; exact Hsum ].
+
+Theorem brushes_sides_valid_correct : forall f,
+  brushes_sides_valid f = true ->
+  forall b, In b (bf_brushes f) ->
+  0 <= br_first_side b /\
+  0 <= br_num_sides b /\
+  br_first_side b + br_num_sides b <=
+    Z.of_nat (length (bf_brush_sides f)).
+Proof. reflect_range3 brushes_sides_valid. Qed.
+
+Theorem leaves_faces_valid_correct : forall f,
+  leaves_faces_valid f = true ->
+  forall l, In l (bf_leaves f) ->
+  0 <= lf_first_leaf_face l /\
+  0 <= lf_num_leaf_faces l /\
+  lf_first_leaf_face l + lf_num_leaf_faces l <=
+    Z.of_nat (length (bf_leaf_faces f)).
+Proof. reflect_range3 leaves_faces_valid. Qed.
+
+Theorem leaves_brushes_valid_correct : forall f,
+  leaves_brushes_valid f = true ->
+  forall l, In l (bf_leaves f) ->
+  0 <= lf_first_leaf_brush l /\
+  0 <= lf_num_leaf_brushes l /\
+  lf_first_leaf_brush l + lf_num_leaf_brushes l <=
+    Z.of_nat (length (bf_leaf_brushes f)).
+Proof. reflect_range3 leaves_brushes_valid. Qed.
+
+Theorem models_brushes_valid_correct : forall f,
+  models_brushes_valid f = true ->
+  forall m, In m (bf_models f) ->
+  0 <= md_first_brush m /\
+  0 <= md_num_brushes m /\
+  md_first_brush m + md_num_brushes m <=
+    Z.of_nat (length (bf_brushes f)).
+Proof. reflect_range3 models_brushes_valid. Qed.
+
+(** Top-level: if [bsp_cross_lump_valid] returns [true], every
+    individual consistency property holds. *)
+Theorem bsp_cross_lump_valid_sound : forall f,
+  bsp_cross_lump_valid f = true ->
+  (forall n, In n (bf_nodes f) ->
+     0 <= nd_plane n < Z.of_nat (length (bf_planes f))) /\
+  (forall s, In s (bf_brush_sides f) ->
+     0 <= bs_plane_index s < Z.of_nat (length (bf_planes f))) /\
+  (forall s, In s (bf_brush_sides f) ->
+     0 <= bs_texture_index s < Z.of_nat (length (bf_textures f))) /\
+  (forall b, In b (bf_brushes f) ->
+     0 <= br_texture_index b < Z.of_nat (length (bf_textures f))) /\
+  (forall e, In e (bf_effects f) ->
+     0 <= fx_brush_index e < Z.of_nat (length (bf_brushes f))).
+Proof.
+  intros f Hv. unfold bsp_cross_lump_valid in Hv.
+  repeat rewrite Bool.andb_true_iff in Hv.
+  destruct Hv as [[[[[[[[[Hn Hbsp] Hbst] Hbt] Hbs] Heb] _] _] _] _].
+  exact (conj (nodes_planes_valid_correct f Hn)
+        (conj (brush_sides_planes_valid_correct f Hbsp)
+        (conj (brush_sides_textures_valid_correct f Hbst)
+        (conj (brushes_textures_valid_correct f Hbt)
+              (effects_brushes_valid_correct f Heb))))).
+Qed.

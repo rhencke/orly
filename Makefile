@@ -18,6 +18,7 @@ THEORIES := \
   theories/BspLightmapVisEffect.v \
   theories/BspEntity.v \
   theories/BspFile.v \
+  theories/BspPatch.v \
   theories/BspProofs.v \
   theories/GameState.v \
   theories/ExtractBsp.v

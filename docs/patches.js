@@ -1,5 +1,10 @@
 // ── Bezier patch tessellation for Q3 BSP type-2 faces ────────────
 //
+// SUPERSEDED: the authoritative tessellation logic now lives in Rocq
+// (theories/BspPatch.v) with proofs.  This JS file remains as a
+// temporary fallback until the JS-to-Rocq bridge is wired up,
+// at which point JS will consume pre-tessellated meshes from Rocq.
+//
 // Q3 BSP patch faces store a grid of control points for bi-quadratic
 // Bezier surfaces (3x3 control points per sub-patch).  This module
 // tessellates them into triangle meshes that slot into the renderer's

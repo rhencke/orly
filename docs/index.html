@@ -274,6 +274,9 @@ Qed.
   </div>
 
   <script type="module">
+    import { parseBsp } from './bsp.js';
+    import { createRenderer, mat4Perspective, mat4LookAt } from './renderer.js';
+
     // ── status bar helpers ───────────────────────────────────────
     const statusBar = document.getElementById('status-bar');
 
@@ -389,6 +392,74 @@ Qed.
       console.error('Asset loading failed:', err);
       window.orlyAssets = new Map();
       if (jscoqOk) showStatus(`Failed to load assets: ${err.message}`, 'error');
+    }
+
+    // ── BSP parse + render pipeline ──────────────────────────────
+    // If the BSP file was loaded, parse it and start the renderer.
+    // The placeholder is hidden once WebGL is up and drawing.
+    const bspBuffer = window.orlyAssets.get('maps/q3dm1.bsp');
+    if (bspBuffer) {
+      try {
+        showStatus('Parsing BSP…');
+        const bsp = parseBsp(bspBuffer);
+        console.log(`orly: parsed BSP — ${bsp.faces.length} faces, ` +
+                    `${bsp.vertices.length} vertices, ` +
+                    `${bsp.lightmaps.length} lightmaps`);
+
+        // Find a spawn point from BSP entities for initial camera
+        const spawn = bsp.entities.find(e =>
+          e.get('classname') === 'info_player_deathmatch');
+        let eyeX = 0, eyeY = 0, eyeZ = 0, yawDeg = 0;
+        if (spawn) {
+          const origin = spawn.get('origin');
+          if (origin) {
+            const parts = origin.split(/\s+/).map(Number);
+            eyeX = parts[0] || 0;
+            eyeY = parts[1] || 0;
+            eyeZ = parts[2] || 0;
+            // Q3 stores eye height ~56 units above spawn origin
+            eyeZ += 56;
+          }
+          const angle = spawn.get('angle');
+          if (angle) yawDeg = Number(angle) || 0;
+        }
+
+        showStatus('Initializing renderer…');
+        const renderer = createRenderer(canvas, bsp);
+
+        // Hide the placeholder — WebGL is live
+        document.getElementById('game-placeholder').hidden = true;
+
+        // Pre-allocate matrices for the render loop
+        const viewMatrix = new Float32Array(16);
+        const projMatrix = new Float32Array(16);
+
+        // Convert yaw to a look-at target (Q3: 0° = +x, 90° = +y)
+        const yawRad = yawDeg * Math.PI / 180;
+        const lookX = eyeX + Math.cos(yawRad);
+        const lookY = eyeY + Math.sin(yawRad);
+        const lookZ = eyeZ;
+
+        mat4LookAt(viewMatrix,
+                   [eyeX, eyeY, eyeZ],
+                   [lookX, lookY, lookZ],
+                   [0, 0, 1]);
+
+        function frame() {
+          // Update projection each frame to track canvas resize
+          const aspect = canvas.width / canvas.height || 1;
+          mat4Perspective(projMatrix, Math.PI / 2, aspect, 1.0, 4096.0);
+          renderer.render(viewMatrix, projMatrix);
+          requestAnimationFrame(frame);
+        }
+        requestAnimationFrame(frame);
+
+        clearStatus();
+        console.log('orly: render pipeline active');
+      } catch (err) {
+        console.error('BSP render init failed:', err);
+        showStatus(`Render error: ${err.message}`, 'error');
+      }
     }
 
     // ── game canvas sizing ───────────────────────────────────────

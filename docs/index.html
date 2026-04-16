@@ -275,7 +275,8 @@ Qed.
 
   <script type="module">
     import { parseBsp } from './bsp.js';
-    import { createRenderer, mat4Perspective, mat4LookAt } from './renderer.js';
+    import { createRenderer, mat4Perspective } from './renderer.js';
+    import { createFlyCamera } from './camera.js';
 
     // ── status bar helpers ───────────────────────────────────────
     const statusBar = document.getElementById('status-bar');
@@ -394,6 +395,11 @@ Qed.
       if (jscoqOk) showStatus(`Failed to load assets: ${err.message}`, 'error');
     }
 
+    // ── game canvas sizing ───────────────────────────────────────
+    // Keep the canvas pixel dimensions in sync with its CSS layout size
+    // so the renderer gets a correctly sized drawing surface.
+    const canvas = document.getElementById('game-canvas');
+
     // ── BSP parse + render pipeline ──────────────────────────────
     // If the BSP file was loaded, parse it and start the renderer.
     // The placeholder is hidden once WebGL is up and drawing.
@@ -427,45 +433,39 @@ Qed.
         showStatus('Initializing renderer…');
         const renderer = createRenderer(canvas, bsp);
 
+        // Create fly camera at the spawn point
+        // Click canvas to engage pointer lock; WASD to move, mouse to look
+        const cam = createFlyCamera(canvas, {
+          x: eyeX, y: eyeY, z: eyeZ, yaw: yawDeg,
+        });
+
         // Hide the placeholder — WebGL is live
         document.getElementById('game-placeholder').hidden = true;
 
-        // Pre-allocate matrices for the render loop
-        const viewMatrix = new Float32Array(16);
         const projMatrix = new Float32Array(16);
+        let lastTime = 0;
 
-        // Convert yaw to a look-at target (Q3: 0° = +x, 90° = +y)
-        const yawRad = yawDeg * Math.PI / 180;
-        const lookX = eyeX + Math.cos(yawRad);
-        const lookY = eyeY + Math.sin(yawRad);
-        const lookZ = eyeZ;
+        function frame(now) {
+          const dt = lastTime ? (now - lastTime) / 1000 : 0;
+          lastTime = now;
 
-        mat4LookAt(viewMatrix,
-                   [eyeX, eyeY, eyeZ],
-                   [lookX, lookY, lookZ],
-                   [0, 0, 1]);
+          cam.update(dt);
 
-        function frame() {
           // Update projection each frame to track canvas resize
           const aspect = canvas.width / canvas.height || 1;
           mat4Perspective(projMatrix, Math.PI / 2, aspect, 1.0, 4096.0);
-          renderer.render(viewMatrix, projMatrix);
+          renderer.render(cam.viewMatrix, projMatrix);
           requestAnimationFrame(frame);
         }
         requestAnimationFrame(frame);
 
         clearStatus();
-        console.log('orly: render pipeline active');
+        console.log('orly: render pipeline active — click canvas to fly');
       } catch (err) {
         console.error('BSP render init failed:', err);
         showStatus(`Render error: ${err.message}`, 'error');
       }
     }
-
-    // ── game canvas sizing ───────────────────────────────────────
-    // Keep the canvas pixel dimensions in sync with its CSS layout size
-    // so future renderers get a correctly sized drawing surface.
-    const canvas = document.getElementById('game-canvas');
     const ro = new ResizeObserver(([entry]) => {
       const { width, height } = entry.contentRect;
       canvas.width  = Math.round(width);

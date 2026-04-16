@@ -19,6 +19,7 @@ THEORIES := \
   theories/BspEntity.v \
   theories/BspFile.v \
   theories/BspProofs.v \
+  theories/GameState.v \
   theories/ExtractBsp.v
 
 rocq-build:

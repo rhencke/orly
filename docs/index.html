@@ -277,6 +277,7 @@ Qed.
     import { parseBsp } from './bsp.js';
     import { createRenderer, mat4Perspective } from './renderer.js';
     import { createFlyCamera } from './camera.js';
+    import { loadShadersFromAssets } from './shaders.js';
 
     // ── status bar helpers ───────────────────────────────────────
     const statusBar = document.getElementById('status-bar');
@@ -430,8 +431,16 @@ Qed.
           if (angle) yawDeg = Number(angle) || 0;
         }
 
+        showStatus('Loading shaders…');
+        const shaderDefs = await loadShadersFromAssets(window.orlyAssets);
+        console.log(`orly: loaded ${shaderDefs.size} shader definitions`);
+
         showStatus('Initializing renderer…');
-        const renderer = createRenderer(canvas, bsp);
+        const renderer = createRenderer(canvas, bsp, {
+          shaderDefs,
+          assets: window.orlyAssets,
+          assetBasePath: 'assets/',
+        });
 
         // Create fly camera at the spawn point
         // Click canvas to engage pointer lock; WASD to move, mouse to look

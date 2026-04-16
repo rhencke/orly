@@ -16,6 +16,7 @@
 
 import { FACE_POLYGON, FACE_MESH, isVisibleTexture } from './bsp.js';
 import { tessellatePatches } from './patches.js';
+import { loadShadersFromAssets, getTextureFromShader } from './shaders.js';
 
 // ── shader sources ───────────────────────────────────────────────────
 
@@ -29,10 +30,12 @@ const VERT_SRC = `
   uniform mat4 u_proj;
 
   varying vec2 v_lmCoord;
+  varying vec2 v_texCoord;
   varying vec4 v_color;
 
   void main() {
     v_lmCoord = a_lmCoord;
+    v_texCoord = a_texCoord;
     v_color   = a_color;
     gl_Position = u_proj * u_view * vec4(a_position, 1.0);
   }
@@ -42,18 +45,28 @@ const FRAG_SRC = `
   precision mediump float;
 
   uniform sampler2D u_lightmap;
+  uniform sampler2D u_diffuse;
+  uniform bool u_hasDiffuse;
 
   varying vec2 v_lmCoord;
+  varying vec2 v_texCoord;
   varying vec4 v_color;
 
   void main() {
     vec3 lm = texture2D(u_lightmap, v_lmCoord).rgb;
-    // Lightmap modulates vertex color; gamma-correct the lightmap
-    // from sRGB storage to linear, apply, then back to sRGB would be
-    // ideal — but Q3 shipped without gamma correction, so we match
-    // that look for now.  Brighten slightly (×2) because Q3 lightmaps
-    // are authored for the engine's built-in over-brightening.
-    vec3 color = v_color.rgb * lm * 2.0;
+
+    // If a diffuse texture is available, sample and modulate;
+    // otherwise fall back to lightmap-only with vertex color.
+    vec3 color;
+    if (u_hasDiffuse) {
+      vec3 diffuse = texture2D(u_diffuse, v_texCoord).rgb;
+      // Lightmap modulates diffuse texture and vertex color
+      color = diffuse * v_color.rgb * lm * 2.0;
+    } else {
+      // Fallback: lightmap + vertex color (matches original behavior)
+      color = v_color.rgb * lm * 2.0;
+    }
+
     gl_FragColor = vec4(color, v_color.a);
   }
 `;
@@ -235,6 +248,44 @@ function uploadLightmaps(gl, bsp) {
   return { textures, white };
 }
 
+// ── diffuse image textures ──────────────────────────────────────────
+//
+// Load JPG/PNG diffuse texture from an ArrayBuffer synchronously using
+// canvas 2D context as a workaround since we can't use Image in sync context.
+
+function uploadImageAsTexture(gl, imageBuffer) {
+  // Create a canvas, draw the image data, and read it back
+  const blob = new Blob([imageBuffer]);
+  const url = URL.createObjectURL(blob);
+  const img = new Image();
+
+  // This is async in reality, but we'll create the WebGL texture with a
+  // placeholder 1×1 texture and return it. For a full implementation,
+  // the caller would need to handle async image loading separately.
+  // For now, just create a white placeholder and skip diffuse rendering.
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0,
+                gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 255, 255, 255]));
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+  // Start loading in background; we'll update the texture when done
+  img.onload = () => {
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, img);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    URL.revokeObjectURL(url);
+  };
+  img.src = url;
+
+  return tex;
+}
+
 // ── minimal mat4 utilities ───────────────────────────────────────────
 //
 // Just enough to set up a default projection and identity view.
@@ -315,13 +366,14 @@ export function mat4LookAt(out, eye, center, up) {
 // ── renderer factory ─────────────────────────────────────────────────
 
 /**
- * Create a WebGL renderer for Q3 BSP face geometry.
+ * Create a WebGL renderer for Q3 BSP face geometry with optional diffuse textures.
  *
  * @param {HTMLCanvasElement} canvas — the target canvas
  * @param {object} bsp — parsed BSP data from parseBsp()
+ * @param {object} options — { shaderDefs, assets, assetBasePath }
  * @returns {{ render(view: Float32Array, proj: Float32Array): void, destroy(): void }}
  */
-export function createRenderer(canvas, bsp) {
+export function createRenderer(canvas, bsp, options = {}) {
   const gl = canvas.getContext('webgl', { antialias: false, alpha: false });
   if (!gl) throw new Error('WebGL not available');
 
@@ -340,6 +392,8 @@ export function createRenderer(canvas, bsp) {
   const uView     = gl.getUniformLocation(program, 'u_view');
   const uProj     = gl.getUniformLocation(program, 'u_proj');
   const uLightmap = gl.getUniformLocation(program, 'u_lightmap');
+  const uDiffuse  = gl.getUniformLocation(program, 'u_diffuse');
+  const uHasDiffuse = gl.getUniformLocation(program, 'u_hasDiffuse');
 
   // ── tessellate bezier patches ───────────────────────────────────
   const patches = tessellatePatches(bsp);
@@ -350,6 +404,33 @@ export function createRenderer(canvas, bsp) {
   const { ibo, groups, indexType, indexSize } =
     buildIndexBuffer(gl, bsp, patches.groupMap, allVertices.length);
   const lm = uploadLightmaps(gl, bsp);
+
+  // ── diffuse textures ────────────────────────────────────────────
+  // Build a map of face index → diffuse texture handle so we can bind
+  // the right texture per-face.  Requires shader definitions.
+  const faceTextures = new Map(); // face_index → { glTex, hasDiffuse }
+  const { shaderDefs, assets, assetBasePath } = options;
+  if (shaderDefs && assets && assetBasePath !== undefined) {
+    for (let fi = 0; fi < bsp.faces.length; fi++) {
+      const face = bsp.faces[fi];
+      const bspTexName = bsp.textures[face.texture]?.name;
+      if (!bspTexName) continue;
+
+      const texPath = getTextureFromShader(bspTexName, shaderDefs);
+      if (texPath) {
+        const assetPath = assetBasePath + texPath;
+        const buffer = assets.get(assetPath);
+        if (buffer) {
+          try {
+            const tex = uploadImageAsTexture(gl, buffer);
+            faceTextures.set(fi, { glTex: tex, hasDiffuse: true });
+          } catch (err) {
+            console.warn(`Failed to load diffuse ${assetPath}:`, err);
+          }
+        }
+      }
+    }
+  }
 
   // ── GL state ─────────────────────────────────────────────────────
   gl.clearColor(0.05, 0.05, 0.05, 1.0);
@@ -381,19 +462,46 @@ export function createRenderer(canvas, bsp) {
     gl.enableVertexAttribArray(aColor);
     gl.vertexAttribPointer(aColor, 4, gl.UNSIGNED_BYTE, true, VERTEX_STRIDE, 28);
 
-    // Lightmap sampler
+    // Lightmap sampler (texture unit 0)
     gl.activeTexture(gl.TEXTURE0);
     gl.uniform1i(uLightmap, 0);
+
+    // Diffuse sampler (texture unit 1) — defaults to white if not set
+    gl.activeTexture(gl.TEXTURE1);
+    gl.uniform1i(uDiffuse, 1);
 
     // Bind IBO
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
 
     // Draw each lightmap group
     for (const g of groups) {
-      const tex = (g.lmIndex >= 0 && g.lmIndex < lm.textures.length)
+      // Bind lightmap
+      const lmTex = (g.lmIndex >= 0 && g.lmIndex < lm.textures.length)
         ? lm.textures[g.lmIndex]
         : lm.white;
-      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, lmTex);
+
+      // Try to find and bind diffuse texture for this lightmap group.
+      // For now, use a simple heuristic: if any face in this group has
+      // a diffuse texture, use it. A better approach would track which
+      // faces belong to which groups, but that requires restructuring
+      // the draw batching to be per-face instead of per-lightmap.
+      let hasDiffuse = false;
+      for (const fi of g.faceIndices || []) {
+        if (faceTextures.has(fi)) {
+          gl.activeTexture(gl.TEXTURE1);
+          gl.bindTexture(gl.TEXTURE_2D, faceTextures.get(fi).glTex);
+          hasDiffuse = true;
+          break;
+        }
+      }
+      if (!hasDiffuse) {
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, lm.white);
+      }
+
+      gl.uniform1i(uHasDiffuse, hasDiffuse ? 1 : 0);
       gl.drawElements(gl.TRIANGLES, g.count, indexType, g.start * indexSize);
     }
   }

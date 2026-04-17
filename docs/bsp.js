@@ -10,7 +10,7 @@
 //   const bsp = parseBsp(arrayBuffer);  // throws on invalid input
 
 // ── constants ────────────────────────────────────────────────────────
-const BSP_MAGIC   = 0x49425350;  // "IBSP" little-endian
+const BSP_MAGIC   = 0x49425350;  // "IBSP" as stored in the file header
 const BSP_VERSION = 46;
 const NUM_LUMPS   = 17;
 
@@ -420,7 +420,7 @@ export function parseBsp(buffer) {
   const view = new DataView(buffer);
 
   // Validate header — matches BspFormat.v parse_bsp_header
-  const magic   = view.getUint32(0, true);
+  const magic   = view.getUint32(0, false);
   const version = view.getInt32(4, true);
   if (magic !== BSP_MAGIC) {
     throw new Error(`Bad BSP magic: 0x${magic.toString(16)} (expected 0x${BSP_MAGIC.toString(16)})`);

@@ -21,6 +21,7 @@
 From Stdlib Require Import List.
 From Stdlib Require Import ZArith.
 From Stdlib Require Import QArith.
+From Bsp Require Import BspEntity.
 Import ListNotations.
 Open Scope Z_scope.
 
@@ -189,3 +190,141 @@ Proof. reflexivity. Qed.
 Lemma extract_snapshot_camera_pitch : forall gs,
   rs_camera_pitch (extract_snapshot gs) = gs_pitch gs.
 Proof. reflexivity. Qed.
+
+(* ------------------------------------------------------------------ *)
+(** ** Spawn-point extraction from entity data                          *)
+(* ------------------------------------------------------------------ *)
+
+(** Parse a "x y z" origin value string (ASCII byte list) into a
+    [vec3].  Each component is a signed decimal integer, separated by
+    spaces.  Returns [None] if the format does not match. *)
+Definition parse_origin_vec3 (cs : list Z) : option vec3 :=
+  match parse_int cs with
+  | None          => None
+  | Some (x, cs1) =>
+      match cs1 with
+      | 32 :: cs2 =>
+          match parse_int cs2 with
+          | None          => None
+          | Some (y, cs3) =>
+              match cs3 with
+              | 32 :: cs4 =>
+                  match parse_int cs4 with
+                  | None        => None
+                  | Some (z, _) =>
+                      Some (mk_vec3 (inject_Z x) (inject_Z y) (inject_Z z))
+                  end
+              | _ => None
+              end
+          end
+      | _ => None
+      end
+  end.
+
+(** True iff entity [e] has classname [info_player_deathmatch]. *)
+Definition is_spawn_entity (e : bsp_entity) : bool :=
+  match entity_get_val e key_classname with
+  | Some v => list_Z_eqb v val_info_player_deathmatch
+  | None   => false
+  end.
+
+(** Extract the world-space origin from a spawn entity.
+    Returns [None] if no [origin] key is present or the value is
+    unparseable. *)
+Definition spawn_origin_of_entity (e : bsp_entity) : option vec3 :=
+  match entity_get_val e key_origin with
+  | Some v => parse_origin_vec3 v
+  | None   => None
+  end.
+
+(** Extract the yaw angle (degrees) from an entity's [angle] key.
+    Returns [0] if the key is absent or the value is unparseable. *)
+Definition spawn_yaw_of_entity (e : bsp_entity) : Q :=
+  match entity_get_val e key_angle with
+  | Some v =>
+      match parse_int v with
+      | Some (a, _) => inject_Z a
+      | None        => 0
+      end
+  | None => 0
+  end.
+
+(** [select_spawn_point entities] returns the position and yaw of the
+    first [info_player_deathmatch] entity that has a parseable [origin].
+    Returns [None] if no such entity exists. *)
+Fixpoint select_spawn_point (entities : list bsp_entity)
+    : option (vec3 * Q) :=
+  match entities with
+  | []       => None
+  | e :: rest =>
+      if is_spawn_entity e then
+        match spawn_origin_of_entity e with
+        | Some pos => Some (pos, spawn_yaw_of_entity e)
+        | None     => select_spawn_point rest
+        end
+      else select_spawn_point rest
+  end.
+
+(** Initialise a [game_state] from parsed entity data.  The player
+    starts at the first [info_player_deathmatch] spawn point found in
+    [entities]; if none exists, falls back to [game_state_init]. *)
+Definition game_state_from_entities (entities : list bsp_entity)
+    : game_state :=
+  match select_spawn_point entities with
+  | Some (pos, yaw) => mk_game_state pos vec3_zero yaw 0 true [] 0
+  | None            => game_state_init
+  end.
+
+(* ------------------------------------------------------------------ *)
+(** ** Correctness lemmas for spawn-point selection                     *)
+(* ------------------------------------------------------------------ *)
+
+(** Parsing the canonical "0 0 24" spawn height produces the correct
+    vec3. *)
+Lemma parse_origin_example :
+  parse_origin_vec3 [48; 32; 48; 32; 50; 52] =
+    Some (mk_vec3 0 0 24).
+Proof. vm_compute. reflexivity. Qed.
+
+(** Negative origin components are handled correctly. *)
+Lemma parse_origin_neg_example :
+  parse_origin_vec3 [45; 52; 56; 32; 49; 50; 56; 32; 45; 56] =
+    Some (mk_vec3 (inject_Z (-48)) (inject_Z 128) (inject_Z (-8))).
+Proof. vm_compute. reflexivity. Qed.
+
+(** An empty entity list has no spawn points. *)
+Lemma select_spawn_point_nil :
+  select_spawn_point [] = None.
+Proof. reflexivity. Qed.
+
+(** Falling back on an empty entity list gives [game_state_init]. *)
+Lemma game_state_from_entities_nil_fallback :
+  game_state_from_entities [] = game_state_init.
+Proof. reflexivity. Qed.
+
+(** A spawn-derived state has tick count 0. *)
+Lemma game_state_from_entities_tick : forall entities,
+  gs_tick (game_state_from_entities entities) = 0.
+Proof.
+  intros entities. unfold game_state_from_entities.
+  destruct (select_spawn_point entities) as [[[px py pz] yaw] |];
+    reflexivity.
+Qed.
+
+(** A spawn-derived state has zero velocity. *)
+Lemma game_state_from_entities_velocity : forall entities,
+  gs_velocity (game_state_from_entities entities) = vec3_zero.
+Proof.
+  intros entities. unfold game_state_from_entities.
+  destruct (select_spawn_point entities) as [[[px py pz] yaw] |];
+    reflexivity.
+Qed.
+
+(** A spawn-derived state starts grounded. *)
+Lemma game_state_from_entities_grounded : forall entities,
+  gs_on_ground (game_state_from_entities entities) = true.
+Proof.
+  intros entities. unfold game_state_from_entities.
+  destruct (select_spawn_point entities) as [[[px py pz] yaw] |];
+    reflexivity.
+Qed.

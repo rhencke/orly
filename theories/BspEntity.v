@@ -221,3 +221,139 @@ Proof. vm_compute. reflexivity. Qed.
 Lemma parse_entities_unclosed_quote :
   parse_entities [123; 10; 34; 97; 10; 125] = None.
 Proof. vm_compute. reflexivity. Qed.
+
+(* ------------------------------------------------------------------ *)
+(** ** Key-value lookup                                                 *)
+(* ------------------------------------------------------------------ *)
+
+(** Equality test for [list Z] (byte-string comparison). *)
+Fixpoint list_Z_eqb (xs ys : list Z) : bool :=
+  match xs, ys with
+  | [], []             => true
+  | x :: xs', y :: ys' => (x =? y) && list_Z_eqb xs' ys'
+  | _, _               => false
+  end.
+
+(** [entity_get_val e key] returns the value associated with [key] in
+    entity [e], or [None] if the key is absent. *)
+Fixpoint entity_get_val (e : bsp_entity) (key : list Z) : option (list Z) :=
+  match e with
+  | []             => None
+  | (k, v) :: rest =>
+      if list_Z_eqb k key then Some v
+      else entity_get_val rest key
+  end.
+
+(* ------------------------------------------------------------------ *)
+(** ** Named key and value constants                                    *)
+(* ------------------------------------------------------------------ *)
+
+(** ASCII encoding of the string "classname". *)
+Definition key_classname : list Z :=
+  [99; 108; 97; 115; 115; 110; 97; 109; 101].
+
+(** ASCII encoding of "info_player_deathmatch". *)
+Definition val_info_player_deathmatch : list Z :=
+  [105; 110; 102; 111; 95; 112; 108; 97; 121; 101; 114; 95;
+   100; 101; 97; 116; 104; 109; 97; 116; 99; 104].
+
+(** ASCII encoding of "origin". *)
+Definition key_origin : list Z :=
+  [111; 114; 105; 103; 105; 110].
+
+(** ASCII encoding of "angle". *)
+Definition key_angle : list Z :=
+  [97; 110; 103; 108; 101].
+
+(* ------------------------------------------------------------------ *)
+(** ** Integer value parser                                             *)
+(* ------------------------------------------------------------------ *)
+
+Definition ascii_minus : Z := 45.   (** '-' *)
+Definition ascii_space : Z := 32.   (** ' ' *)
+
+(** True iff [c] is an ASCII decimal digit. *)
+Definition is_digit (c : Z) : bool := (48 <=? c) && (c <=? 57).
+
+(** Scan decimal digits from [cs], accumulating the value in [acc].
+    [fuel] bounds recursion; passing [length cs] is always sufficient,
+    since each step consumes one byte. *)
+Fixpoint scan_digits (cs : list Z) (acc : Z) (fuel : nat)
+    : (Z * list Z) :=
+  match fuel with
+  | O      => (acc, cs)
+  | S fuel' =>
+      match cs with
+      | c :: rest =>
+          if is_digit c
+          then scan_digits rest (acc * 10 + (c - 48)) fuel'
+          else (acc, cs)
+      | [] => (acc, [])
+      end
+  end.
+
+(** Parse a signed decimal integer from the front of [cs].
+    Returns [(value, remainder)] or [None] if [cs] does not begin with
+    a digit or with '-' followed by a digit. *)
+Definition parse_int (cs : list Z) : option (Z * list Z) :=
+  match cs with
+  | [] => None
+  | c :: rest =>
+      if c =? ascii_minus then
+        match rest with
+        | d :: _ =>
+            if is_digit d
+            then let (n, tail) := scan_digits rest 0 (length rest) in
+                 Some (- n, tail)
+            else None
+        | [] => None
+        end
+      else if is_digit c
+           then let (n, tail) := scan_digits cs 0 (length cs) in
+                Some (n, tail)
+           else None
+  end.
+
+(* ------------------------------------------------------------------ *)
+(** ** Correctness lemmas for lookup and parsing                        *)
+(* ------------------------------------------------------------------ *)
+
+(** [list_Z_eqb] is reflexive. *)
+Lemma list_Z_eqb_refl : forall xs, list_Z_eqb xs xs = true.
+Proof.
+  induction xs as [| x xs' IH]; simpl.
+  - reflexivity.
+  - rewrite Z.eqb_refl. simpl. exact IH.
+Qed.
+
+(** Matching key at the head of an entity returns that key's value. *)
+Lemma entity_get_val_head : forall k v rest,
+  entity_get_val ((k, v) :: rest) k = Some v.
+Proof.
+  intros k v rest. simpl. rewrite list_Z_eqb_refl. reflexivity.
+Qed.
+
+(** Empty entity list has no keys. *)
+Lemma entity_get_val_nil : forall key,
+  entity_get_val [] key = None.
+Proof. reflexivity. Qed.
+
+(** Empty input gives [None]. *)
+Lemma parse_int_none_empty : parse_int [] = None.
+Proof. reflexivity. Qed.
+
+(** Bare minus gives [None]. *)
+Lemma parse_int_none_minus_only : parse_int [45] = None.
+Proof. vm_compute. reflexivity. Qed.
+
+(** Single zero digit parses to 0. *)
+Lemma parse_int_zero : parse_int [48] = Some (0, []).
+Proof. vm_compute. reflexivity. Qed.
+
+(** Two-digit positive integer. *)
+Lemma parse_int_pos_42 : parse_int [52; 50] = Some (42, []).
+Proof. vm_compute. reflexivity. Qed.
+
+(** Negative integer. *)
+Lemma parse_int_neg_1 : parse_int [45; 49] = Some (-1, []).
+Proof. vm_compute. reflexivity. Qed.

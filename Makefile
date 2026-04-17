@@ -28,7 +28,9 @@ THEORIES := \
 # file served to the JsCoq IDE panel in the browser.  It is the
 # concatenation of the three game-core theories in dependency order
 # (BspBinary → BspEntity → GameState) with cross-file
-# "From Bsp Require Import" lines stripped (their content is inlined).
+# "From Bsp Require Import" lines stripped (their content is inlined),
+# and "From Stdlib Require Import" rewritten to plain "Require Import"
+# so the bundled theory still loads under JsCoq's older stdlib layout.
 # JsCoq 0.17.1 runs Rocq 8.17.1 and cannot load pre-compiled .vo
 # packages built with our system Rocq 9.x; this flat-file approach
 # lets JsCoq compile the theories on the fly using only the stdlib.
@@ -45,7 +47,7 @@ PAGES_MANIFEST    = $(ASSETS_DIR)/manifest.json
 $(BSP_CORE_V): $(BSP_CORE_SRCS)
 	mkdir -p $(DOCS_THEORIES_DIR)
 	{ cat $(BSP_CORE_SRCS); } \
-	  | grep -v '^From Bsp Require Import' > $@
+	  | sed -E '/^From Bsp Require Import /d; s/^From Stdlib Require Import ([^.]+)\.$$/Require Import \1./' > $@
 
 browser-theories: $(BSP_CORE_V)
 

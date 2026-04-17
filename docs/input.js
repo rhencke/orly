@@ -178,6 +178,7 @@ function createTouchPad(pad, knob, { accumulateLook = false, onPressChange = nul
   pad.addEventListener('pointermove', onPointerMove);
   pad.addEventListener('pointerup', onPointerEnd);
   pad.addEventListener('pointercancel', onPointerEnd);
+  pad.addEventListener('lostpointercapture', reset);
 
   return {
     sample() {
@@ -198,6 +199,7 @@ function createTouchPad(pad, knob, { accumulateLook = false, onPressChange = nul
       pad.removeEventListener('pointermove', onPointerMove);
       pad.removeEventListener('pointerup', onPointerEnd);
       pad.removeEventListener('pointercancel', onPointerEnd);
+      pad.removeEventListener('lostpointercapture', reset);
     },
   };
 }
@@ -211,8 +213,26 @@ export function createTouchInput(overlay) {
   const jumpButton = overlay.querySelector('[data-touch-control="jump"]');
   let jumpPressed = false;
 
-  const moveControl = createTouchPad(movePad, moveKnob);
-  const lookControl = createTouchPad(lookPad, lookKnob, { accumulateLook: true });
+  function setActiveClass(element, active) {
+    element.classList.toggle('is-active', active);
+  }
+
+  function setJumpPressed(active) {
+    jumpPressed = active;
+    setActiveClass(jumpButton, active);
+  }
+
+  const moveControl = createTouchPad(movePad, moveKnob, {
+    onPressChange(active) {
+      setActiveClass(movePad, active);
+    },
+  });
+  const lookControl = createTouchPad(lookPad, lookKnob, {
+    accumulateLook: true,
+    onPressChange(active) {
+      setActiveClass(lookPad, active);
+    },
+  });
 
   function syncVisibility() {
     overlay.hidden = !coarsePointerQuery.matches;
@@ -220,14 +240,18 @@ export function createTouchInput(overlay) {
 
   function onJumpDown(event) {
     if (event.pointerType === 'mouse') return;
-    jumpPressed = true;
+    setJumpPressed(true);
     jumpButton.setPointerCapture?.(event.pointerId);
     event.preventDefault();
   }
 
   function onJumpEnd(event) {
-    jumpPressed = false;
+    setJumpPressed(false);
     event.preventDefault();
+  }
+
+  function onJumpLostPointerCapture() {
+    setJumpPressed(false);
   }
 
   syncVisibility();
@@ -235,6 +259,7 @@ export function createTouchInput(overlay) {
   jumpButton.addEventListener('pointerdown', onJumpDown);
   jumpButton.addEventListener('pointerup', onJumpEnd);
   jumpButton.addEventListener('pointercancel', onJumpEnd);
+  jumpButton.addEventListener('lostpointercapture', onJumpLostPointerCapture);
   window.addEventListener('blur', onJumpEnd);
 
   return {
@@ -257,11 +282,12 @@ export function createTouchInput(overlay) {
     destroy() {
       moveControl.destroy();
       lookControl.destroy();
-      jumpPressed = false;
+      setJumpPressed(false);
       coarsePointerQuery.removeEventListener('change', syncVisibility);
       jumpButton.removeEventListener('pointerdown', onJumpDown);
       jumpButton.removeEventListener('pointerup', onJumpEnd);
       jumpButton.removeEventListener('pointercancel', onJumpEnd);
+      jumpButton.removeEventListener('lostpointercapture', onJumpLostPointerCapture);
       window.removeEventListener('blur', onJumpEnd);
     },
   };

@@ -1,0 +1,15 @@
+{
+  "name": "orly",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Playwright utilities for browser-side orly debugging.",
+  "scripts": {
+    "playwright:install": "playwright install chromium",
+    "test:q3dm1-browser": "node scripts/repro-q3dm1-render.mjs",
+    "repro:q3dm1-render": "node scripts/repro-q3dm1-render.mjs"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "playwright": "^1.52.0"
+  }
+}

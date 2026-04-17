@@ -515,6 +515,34 @@
     // network failures and surface them in the status bar instead of
     // silently failing (a static import failure kills the whole module).
     const JSCOQ_CDN = 'https://cdn.jsdelivr.net/npm/jscoq@0.17.1/';
+    const JSCOQ_WORKER_PATCH = Symbol('orly.jscoqWorkerPatch');
+
+    // Chromium rejects cross-origin classic workers even when the script
+    // itself is CORS-fetchable. Keep JsCoq's packages on the CDN, but swap
+    // its worker entrypoint for a same-origin blob wrapper that importScripts()
+    // the real jscoq worker from jsDelivr.
+    function installJsCoqWorkerBootstrap(CoqWorker, basePath) {
+      if (CoqWorker[JSCOQ_WORKER_PATCH]) return;
+
+      const workerUrl = new URL('backend/jsoo/jscoq_worker.bc.js', basePath).href;
+      const bootstrapUrl = URL.createObjectURL(new Blob([
+        `importScripts(${JSON.stringify(workerUrl)});\n`,
+      ], { type: 'text/javascript' }));
+      const startWorker = CoqWorker.prototype.newWorkerWithProgress;
+
+      CoqWorker.prototype.newWorkerWithProgress = function(url, preload) {
+        const resolved = url instanceof URL
+          ? url.href
+          : new URL(String(url), window.location.href).href;
+        return startWorker.call(
+          this,
+          resolved === workerUrl ? bootstrapUrl : url,
+          preload
+        );
+      };
+
+      CoqWorker[JSCOQ_WORKER_PATCH] = true;
+    }
 
     // ── BSP game theory loader ───────────────────────────────────
     //
@@ -554,10 +582,11 @@
     try {
       // Fetch the JsCoq module and the game theory file in parallel —
       // neither depends on the other, so there's no reason to wait.
-      const [{ JsCoq }, theoryText] = await Promise.all([
+      const [{ JsCoq, CoqWorker }, theoryText] = await Promise.all([
         import('https://cdn.jsdelivr.net/npm/jscoq@0.17.1/jscoq.js'),
         loadBspTheory(),
       ]);
+      installJsCoqWorkerBootstrap(CoqWorker, JSCOQ_CDN);
 
       // Populate the textarea BEFORE JsCoq.start() so the Rocq kernel
       // sees the real game theory text when it initialises the editor.
@@ -607,6 +636,26 @@
     // so the renderer gets a correctly sized drawing surface.
     const canvas = document.getElementById('game-canvas');
     const touchOverlay = document.getElementById('touch-controls');
+    const canvasHost = canvas.parentElement;
+
+    function syncCanvasSize() {
+      if (!canvasHost) return;
+      const { width, height } = canvasHost.getBoundingClientRect();
+      canvas.width = Math.max(1, Math.round(width));
+      canvas.height = Math.max(1, Math.round(height));
+    }
+
+    function nextAnimationFrame() {
+      return new Promise(resolve => requestAnimationFrame(resolve));
+    }
+
+    syncCanvasSize();
+    const ro = new ResizeObserver(() => {
+      syncCanvasSize();
+    });
+    if (canvasHost) {
+      ro.observe(canvasHost);
+    }
 
     // ── BSP parse + render pipeline ──────────────────────────────
     // If the BSP file was loaded, parse it and start the renderer.
@@ -646,12 +695,22 @@
           visibleFaces: initialSnapshot.visibleFaces,
         });
 
-        // Hide the placeholder — WebGL is live
-        document.getElementById('game-placeholder').hidden = true;
-
         const projMatrix = new Float32Array(16);
         const playerInput = createPlayerInput(canvas, touchOverlay);
         let lastFrameTime = null;
+
+        function renderSnapshot(snapshot) {
+          syncCanvasSize();
+          const aspect = canvas.width / canvas.height || 1;
+          mat4Perspective(projMatrix, Math.PI / 2, aspect, 1.0, 4096.0);
+          renderer.render(snapshot.viewMatrix, projMatrix);
+        }
+
+        await nextAnimationFrame();
+        renderSnapshot(initialSnapshot);
+
+        // Hide the placeholder only after a real Rocq-seeded frame has drawn.
+        document.getElementById('game-placeholder').hidden = true;
 
         async function frame(now) {
           const dtMs = lastFrameTime === null
@@ -659,15 +718,9 @@
             : Math.min(100, Math.max(0, now - lastFrameTime));
           lastFrameTime = now;
           const snapshot = await rocqBridge.step(playerInput.sample(dtMs));
-          // Update projection each frame to track canvas resize
-          const aspect = canvas.width / canvas.height || 1;
-          mat4Perspective(projMatrix, Math.PI / 2, aspect, 1.0, 4096.0);
-          renderer.render(snapshot.viewMatrix, projMatrix);
+          renderSnapshot(snapshot);
           requestAnimationFrame(frame);
         }
-        const initialAspect = canvas.width / canvas.height || 1;
-        mat4Perspective(projMatrix, Math.PI / 2, initialAspect, 1.0, 4096.0);
-        renderer.render(initialSnapshot.viewMatrix, projMatrix);
         requestAnimationFrame(frame);
 
         clearStatus();
@@ -677,13 +730,6 @@
         showStatus(`Render error: ${err.message}`, 'error');
       }
     }
-    const ro = new ResizeObserver(([entry]) => {
-      const { width, height } = entry.contentRect;
-      canvas.width  = Math.round(width);
-      canvas.height = Math.round(height);
-    });
-    ro.observe(canvas.parentElement);
-
     // ── direction-aware drag-to-resize ───────────────────────────
     //
     // CSS switches #main between column (portrait/narrow) and row

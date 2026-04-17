@@ -40,9 +40,17 @@ jobs:
 
       - name: Verify licensed Pages map artifact
         run: |
+          expected_sha256='dc86e859e7f4eeadc734308bbd68326b32e9ab2532c316b252ec944ff03a5ce4'
+          expected_size='1235124'
+          actual_sha256="$(sha256sum docs/assets/maps/am_lavaarena.bsp | awk '{print $1}')"
+          actual_size="$(stat -c %s docs/assets/maps/am_lavaarena.bsp)"
+
           test -f docs/assets/manifest.json
           test -f docs/assets/maps/am_lavaarena.bsp
           grep -Fx '  "maps/am_lavaarena.bsp"' docs/assets/manifest.json
+          test "$actual_sha256" = "$expected_sha256"
+          test "$actual_size" = "$expected_size"
+          cmp --silent docs/vendor/maps/openarena/am_lavaarena.bsp docs/assets/maps/am_lavaarena.bsp
           test ! -e docs/assets/maps/q3dm1.bsp
 
       - name: Upload Pages artifact
@@ -55,6 +63,8 @@ jobs:
     if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
+    outputs:
+      page_url: ${{ steps.deployment.outputs.page_url }}
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -62,3 +72,27 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+
+  smoke:
+    if: github.event_name != 'pull_request'
+    needs: deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install browser tooling
+        run: npm ci
+
+      - name: Install Playwright browser
+        run: npm run --silent playwright:install
+
+      - name: Smoke deployed Pages demo
+        env:
+          ORLY_REPRO_DEPLOYED_URL: ${{ needs.deploy.outputs.page_url }}
+        run: npm run --silent test:pages-browser

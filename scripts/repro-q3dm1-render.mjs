@@ -8,6 +8,7 @@ import { chromium, devices } from 'playwright';
 const ROOT = process.cwd();
 const DOCS_DIR = path.join(ROOT, 'docs');
 const LICENSED_MAP_PATH = 'maps/am_lavaarena.bsp';
+const BSP_MAGIC_BYTES = [0x49, 0x42, 0x53, 0x50];
 const LICENSED_MAP_SOURCE = path.join(
   DOCS_DIR,
   'vendor',
@@ -15,6 +16,8 @@ const LICENSED_MAP_SOURCE = path.join(
   'openarena',
   'am_lavaarena.bsp'
 );
+const DEPLOYED_URL = process.env.ORLY_REPRO_DEPLOYED_URL?.trim() || null;
+const SKIP_LOCAL_SCENARIOS = /^(1|true)$/i.test(process.env.ORLY_REPRO_SKIP_LOCAL ?? '');
 const PORT_BASE = Number.parseInt(process.env.ORLY_REPRO_PORT ?? '18080', 10);
 const TIMEOUT_MS = Number.parseInt(process.env.ORLY_REPRO_TIMEOUT_MS ?? '20000', 10);
 const POLL_MS = 500;
@@ -78,7 +81,7 @@ async function sleep(ms) {
   await new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function waitForServer(url, timeoutMs) {
+async function waitForUrl(url, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   let lastError = null;
 
@@ -94,6 +97,49 @@ async function waitForServer(url, timeoutMs) {
   }
 
   throw new Error(`timed out waiting for ${url}: ${lastError?.message ?? 'unknown error'}`);
+}
+
+async function inspectDeployedAssetCaching(baseUrl) {
+  const manifestUrl = new URL('assets/manifest.json', baseUrl).href;
+  const mapUrl = new URL(`assets/${LICENSED_MAP_PATH}`, baseUrl).href;
+
+  async function readHeaders(url, init = {}) {
+    const response = await fetch(url, init);
+    return {
+      url,
+      status: response.status,
+      ok: response.ok,
+      headers: Object.fromEntries(response.headers.entries()),
+    };
+  }
+
+  const [manifestHead, mapHead, mapGet] = await Promise.all([
+    readHeaders(manifestUrl, { method: 'HEAD' }),
+    readHeaders(mapUrl, { method: 'HEAD' }),
+    (async () => {
+      const response = await fetch(mapUrl);
+      const buffer = await response.arrayBuffer();
+      return {
+        url: mapUrl,
+        status: response.status,
+        ok: response.ok,
+        headers: Object.fromEntries(response.headers.entries()),
+        firstBytes: Array.from(new Uint8Array(buffer).slice(0, BSP_MAGIC_BYTES.length)),
+      };
+    })(),
+  ]);
+
+  const etag = mapHead.headers.etag ?? mapGet.headers.etag ?? null;
+  const revalidateHead = etag
+    ? await readHeaders(mapUrl, { method: 'HEAD', headers: { 'If-None-Match': etag } })
+    : null;
+
+  return {
+    manifestHead,
+    mapHead,
+    mapGet,
+    revalidateHead,
+  };
 }
 
 function startStaticServer(rootDir, port) {
@@ -407,6 +453,46 @@ function assertDesktopRenderStartupScenario(snapshot, consoleEvents) {
   }
 }
 
+function assertDeployedPagesScenario(snapshot, consoleEvents, interactions) {
+  assertDesktopRenderStartupScenario(snapshot, consoleEvents);
+
+  const assetChecks = interactions.deployedAssetChecks;
+  if (!assetChecks) {
+    throw new Error('deployed asset diagnostics missing');
+  }
+
+  if (!assetChecks.manifestHead?.ok) {
+    throw new Error(`deployed manifest HEAD failed: HTTP ${assetChecks.manifestHead?.status ?? 'unknown'}`);
+  }
+  if (!assetChecks.mapHead?.ok) {
+    throw new Error(`deployed BSP HEAD failed: HTTP ${assetChecks.mapHead?.status ?? 'unknown'}`);
+  }
+  if (!assetChecks.mapGet?.ok) {
+    throw new Error(`deployed BSP GET failed: HTTP ${assetChecks.mapGet?.status ?? 'unknown'}`);
+  }
+
+  const magic = assetChecks.mapGet.firstBytes ?? [];
+  if (JSON.stringify(magic) !== JSON.stringify(BSP_MAGIC_BYTES)) {
+    throw new Error(`deployed BSP magic mismatch: got [${magic.join(', ')}]`);
+  }
+
+  const cacheControl = assetChecks.mapHead.headers['cache-control'] ?? '';
+  if (!/\bmax-age=\d+/.test(cacheControl)) {
+    throw new Error(`deployed BSP is not cacheable: ${cacheControl || '(missing cache-control)'}`);
+  }
+
+  const etag = assetChecks.mapHead.headers.etag ?? assetChecks.mapGet.headers.etag ?? '';
+  if (!etag) {
+    throw new Error('deployed BSP is missing an ETag for cache revalidation');
+  }
+
+  if (assetChecks.revalidateHead?.status !== 304) {
+    throw new Error(
+      `deployed BSP conditional HEAD should return 304, got ${assetChecks.revalidateHead?.status ?? 'unknown'}`
+    );
+  }
+}
+
 function assertRectWithinViewport(name, rect, viewport) {
   if (!rect) {
     throw new Error(`${name} rect missing`);
@@ -523,16 +609,16 @@ async function exerciseResizeHandle(page, orientation) {
 }
 
 async function runScenario(browser, scenario, outDir, port) {
-  const scenarioRoot = await createScenarioRoot(scenario.rootScenario ?? scenario.name);
-  const { server, readLogs } = startStaticServer(scenarioRoot, port);
-  const url = `http://127.0.0.1:${port}/`;
+  const scenarioRoot = scenario.url ? null : await createScenarioRoot(scenario.rootScenario ?? scenario.name);
+  const serverInfo = scenario.url ? null : startStaticServer(scenarioRoot, port);
+  const url = scenario.url ?? `http://127.0.0.1:${port}/`;
   const consoleEvents = [];
   let context = null;
   let page = null;
 
   try {
-    await waitForServer(url, 10000).catch(error => {
-      const logs = readLogs();
+    await waitForUrl(url, scenario.url ? 30000 : 10000).catch(error => {
+      const logs = serverInfo?.readLogs() ?? { stdout: '', stderr: '' };
       throw new Error(
         `${error.message}\nstdout:\n${logs.stdout || '(empty)'}\nstderr:\n${logs.stderr || '(empty)'}`
       );
@@ -574,7 +660,7 @@ async function runScenario(browser, scenario, outDir, port) {
       snapshot: finalSnapshot,
       interactions,
       consoleEvents,
-      serverLogs: readLogs(),
+      serverLogs: serverInfo?.readLogs() ?? null,
       screenshotPath,
     };
   } catch (error) {
@@ -590,20 +676,24 @@ async function runScenario(browser, scenario, outDir, port) {
       failure: error.message,
       snapshot: failureSnapshot,
       consoleEvents,
-      serverLogs: readLogs(),
+      serverLogs: serverInfo?.readLogs() ?? null,
       screenshotPath,
     };
   } finally {
     await context?.close().catch(() => {});
-    server.kill('SIGTERM');
-    await new Promise(resolve => {
-      if (server.exitCode !== null) {
-        resolve();
-      } else {
-        server.once('exit', resolve);
-      }
-    });
-    await fs.rm(scenarioRoot, { recursive: true, force: true }).catch(() => {});
+    if (serverInfo) {
+      serverInfo.server.kill('SIGTERM');
+      await new Promise(resolve => {
+        if (serverInfo.server.exitCode !== null) {
+          resolve();
+        } else {
+          serverInfo.server.once('exit', resolve);
+        }
+      });
+    }
+    if (scenarioRoot) {
+      await fs.rm(scenarioRoot, { recursive: true, force: true }).catch(() => {});
+    }
   }
 }
 
@@ -611,54 +701,84 @@ async function main() {
   const browser = await chromium.launch({ headless: true });
 
   try {
+    if (SKIP_LOCAL_SCENARIOS && !DEPLOYED_URL) {
+      throw new Error('ORLY_REPRO_DEPLOYED_URL is required when ORLY_REPRO_SKIP_LOCAL is set');
+    }
+
     const outDir = await fs.mkdtemp(path.join(os.tmpdir(), 'orly-licensed-map-regression-'));
     const diagnosticsPath = path.join(outDir, 'diagnostics.json');
     const scenarios = [];
 
-    const scenarioConfigs = [
-      {
-        name: 'browser-load-no-assets',
-        assert(snapshot, consoleEvents) {
-          assertNoAssetsScenario(snapshot, consoleEvents);
+    const scenarioConfigs = [];
+
+    if (!SKIP_LOCAL_SCENARIOS) {
+      scenarioConfigs.push(
+        {
+          name: 'browser-load-no-assets',
+          assert(snapshot, consoleEvents) {
+            assertNoAssetsScenario(snapshot, consoleEvents);
+          },
         },
-      },
-      {
-        name: 'licensed-map-render-startup-desktop',
-        rootScenario: 'licensed-map-render-startup',
+        {
+          name: 'licensed-map-render-startup-desktop',
+          rootScenario: 'licensed-map-render-startup',
+          contextOptions: {
+            viewport: { width: 1280, height: 720 },
+          },
+          assert(snapshot, consoleEvents) {
+            assertDesktopRenderStartupScenario(snapshot, consoleEvents);
+          },
+        },
+        {
+          name: 'licensed-map-render-startup-mobile-portrait',
+          rootScenario: 'licensed-map-render-startup',
+          contextOptions: IPHONE_13,
+          async afterReady(page) {
+            return {
+              resize: await exerciseResizeHandle(page, 'portrait'),
+            };
+          },
+          assert(snapshot, consoleEvents, interactions) {
+            assertMobileRenderStartupScenario(interactions.readySnapshot, consoleEvents, 'portrait');
+          },
+        },
+        {
+          name: 'licensed-map-render-startup-mobile-landscape',
+          rootScenario: 'licensed-map-render-startup',
+          contextOptions: IPHONE_13_LANDSCAPE,
+          async afterReady(page) {
+            return {
+              resize: await exerciseResizeHandle(page, 'landscape'),
+            };
+          },
+          assert(snapshot, consoleEvents, interactions) {
+            assertMobileRenderStartupScenario(interactions.readySnapshot, consoleEvents, 'landscape');
+          },
+        }
+      );
+    }
+
+    if (DEPLOYED_URL) {
+      scenarioConfigs.push({
+        name: 'deployed-pages-licensed-map-smoke',
+        url: DEPLOYED_URL,
         contextOptions: {
           viewport: { width: 1280, height: 720 },
         },
-        assert(snapshot, consoleEvents) {
-          assertDesktopRenderStartupScenario(snapshot, consoleEvents);
-        },
-      },
-      {
-        name: 'licensed-map-render-startup-mobile-portrait',
-        rootScenario: 'licensed-map-render-startup',
-        contextOptions: IPHONE_13,
-        async afterReady(page) {
+        async afterReady() {
           return {
-            resize: await exerciseResizeHandle(page, 'portrait'),
+            deployedAssetChecks: await inspectDeployedAssetCaching(DEPLOYED_URL),
           };
         },
         assert(snapshot, consoleEvents, interactions) {
-          assertMobileRenderStartupScenario(interactions.readySnapshot, consoleEvents, 'portrait');
+          assertDeployedPagesScenario(snapshot, consoleEvents, interactions);
         },
-      },
-      {
-        name: 'licensed-map-render-startup-mobile-landscape',
-        rootScenario: 'licensed-map-render-startup',
-        contextOptions: IPHONE_13_LANDSCAPE,
-        async afterReady(page) {
-          return {
-            resize: await exerciseResizeHandle(page, 'landscape'),
-          };
-        },
-        assert(snapshot, consoleEvents, interactions) {
-          assertMobileRenderStartupScenario(interactions.readySnapshot, consoleEvents, 'landscape');
-        },
-      },
-    ];
+      });
+    }
+
+    if (scenarioConfigs.length === 0) {
+      throw new Error('no Playwright scenarios configured');
+    }
 
     for (const [index, scenario] of scenarioConfigs.entries()) {
       scenarios.push(await runScenario(browser, scenario, outDir, PORT_BASE + index));

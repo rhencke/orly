@@ -964,6 +964,24 @@ Proof.
     reflexivity.
 Qed.
 
+(** When a spawn point is found, the initial position comes from it. *)
+Lemma game_state_from_entities_position : forall entities pos yaw,
+  select_spawn_point entities = Some (pos, yaw) ->
+  gs_position (game_state_from_entities entities) = pos.
+Proof.
+  intros entities pos yaw Hspawn.
+  unfold game_state_from_entities. rewrite Hspawn. reflexivity.
+Qed.
+
+(** When a spawn point is found, the initial yaw comes from it. *)
+Lemma game_state_from_entities_yaw : forall entities pos yaw,
+  select_spawn_point entities = Some (pos, yaw) ->
+  gs_yaw (game_state_from_entities entities) = yaw.
+Proof.
+  intros entities pos yaw Hspawn.
+  unfold game_state_from_entities. rewrite Hspawn. reflexivity.
+Qed.
+
 (** The bridge helper always yields the five serialized camera values. *)
 Lemma initial_camera_words_from_entities_length : forall entities,
   length (initial_camera_words_from_entities entities) = 10%nat.
@@ -1470,21 +1488,47 @@ Proof.
   intro p. apply Z.leb_gt. apply Pos2Z.is_pos.
 Qed.
 
-(** [game_state_to_words] round-trips through [game_state_from_words]
-    for states with an empty entity list. *)
+(** [entity_state_to_words] round-trips through [entity_state_from_words]
+    with any trailing payload preserved. *)
+Lemma entity_state_roundtrip : forall es tail,
+  entity_state_from_words (entity_state_to_words es ++ tail) =
+  Some (es, tail).
+Proof.
+  intros [entity_index model_index [ox oy oz] active] tail.
+  destruct ox as [oxn oxd], oy as [oyn oyd], oz as [ozn ozd].
+  unfold entity_state_to_words, entity_state_from_words, q_words. simpl.
+  destruct tail as [| z tail']; repeat rewrite Z_pos_leb_0; simpl;
+    destruct active; reflexivity.
+Qed.
+
+Lemma entity_states_roundtrip : forall entities,
+  entity_states_from_words_aux (length entities) (entity_states_to_words entities) =
+  Some (entities, []).
+Proof.
+  induction entities as [| es rest IH].
+  - reflexivity.
+  - cbn [length entity_states_from_words_aux entity_states_to_words].
+    rewrite entity_state_roundtrip.
+    rewrite IH. reflexivity.
+Qed.
+
+(** [game_state_to_words] round-trips through [game_state_from_words]. *)
 Lemma game_state_roundtrip : forall gs,
-  gs_entities gs = [] ->
   game_state_from_words (game_state_to_words gs) = Some gs.
 Proof.
-  intros gs Hnil.
+  intros gs.
   destruct gs as [[px py pz] [vx vy vz] yaw pitch grounded ents tick].
-  simpl in Hnil. subst ents.
   (* Destruct each Q into num/den so Z.to_pos (Z.pos den) = den by reflexivity. *)
   destruct px as [pxn pxd], py as [pyn pyd], pz as [pzn pzd].
   destruct vx as [vxn vxd], vy as [vyn vyd], vz as [vzn vzd].
   destruct yaw as [yn yd], pitch as [pn pd].
   unfold game_state_to_words, game_state_from_words, q_words. simpl.
   repeat rewrite Z_pos_leb_0. simpl.
+  assert ((Z.of_nat (length ents) <? 0) = false) as Hcount.
+  { apply Z.ltb_ge. lia. }
+  rewrite Hcount. simpl.
+  rewrite Nat2Z.id.
+  rewrite entity_states_roundtrip.
   destruct grounded; reflexivity.
 Qed.
 
@@ -1603,6 +1647,50 @@ Lemma point_collides_modelb_sample_trigger :
   point_collides_modelb sample_trigger_world (mk_vec3 0 0 16)
     (mk_collision_model_input 0 1) = true.
 Proof. vm_compute. reflexivity. Qed.
+
+Lemma apply_trigger_pushes_single_outside : forall world pos es,
+  entity_inside_trigger_modelb world pos es = false ->
+  apply_trigger_pushes world pos [es] =
+  (None,
+   [mk_entity_state
+      (es_entity_index es)
+      (es_model_index es)
+      (es_origin es)
+      true]).
+Proof.
+  intros world pos [entity_index model_index [ox oy oz] active] Hinside.
+  simpl in *. rewrite Hinside. destruct active; reflexivity.
+Qed.
+
+Lemma apply_trigger_pushes_single_inside_active : forall world pos es,
+  entity_inside_trigger_modelb world pos es = true ->
+  es_active es = true ->
+  apply_trigger_pushes world pos [es] =
+  (Some (trigger_push_velocity pos (es_origin es)),
+   [mk_entity_state
+      (es_entity_index es)
+      (es_model_index es)
+      (es_origin es)
+      false]).
+Proof.
+  intros world pos [entity_index model_index [ox oy oz] active] Hinside Hactive.
+  simpl in *. subst active. rewrite Hinside. reflexivity.
+Qed.
+
+Lemma apply_trigger_pushes_single_inside_inactive : forall world pos es,
+  entity_inside_trigger_modelb world pos es = true ->
+  es_active es = false ->
+  apply_trigger_pushes world pos [es] =
+  (None,
+   [mk_entity_state
+      (es_entity_index es)
+      (es_model_index es)
+      (es_origin es)
+      false]).
+Proof.
+  intros world pos [entity_index model_index [ox oy oz] active] Hinside Hactive.
+  simpl in *. subst active. rewrite Hinside. reflexivity.
+Qed.
 
 Lemma step_world_in_world_trigger_push_example :
   let stepped :=

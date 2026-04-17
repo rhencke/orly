@@ -55,6 +55,8 @@ jobs:
     if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
+    outputs:
+      page_url: ${{ steps.deployment.outputs.page_url }}
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -62,3 +64,27 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+
+  smoke:
+    if: github.event_name != 'pull_request'
+    needs: deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install browser tooling
+        run: npm ci
+
+      - name: Install Playwright browser
+        run: npm run --silent playwright:install
+
+      - name: Smoke deployed Pages demo
+        env:
+          ORLY_REPRO_DEPLOYED_URL: ${{ needs.deploy.outputs.page_url }}
+        run: npm run --silent test:pages-browser

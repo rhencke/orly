@@ -104,6 +104,16 @@ The regression script runs four scenarios against the local browser build:
 
 It writes screenshots plus JSON diagnostics under your system temp directory.
 
+To smoke the deployed GitHub Pages demo path, including the licensed BSP cache
+headers, run:
+
+```sh
+ORLY_REPRO_DEPLOYED_URL=https://rhencke.github.io/orly/ npm run test:pages-browser
+```
+
+Set `ORLY_REPRO_DEPLOYED_URL` to the specific Pages deployment URL you want to
+probe.
+
 ### Build and test
 
 ```sh

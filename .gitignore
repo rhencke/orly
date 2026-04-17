@@ -69,4 +69,4 @@ extract_assets/*.o
 docs/assets/
 
 # generated browser runtime copied from locked npm dependencies
-docs/vendor/
+docs/vendor/jscoq/

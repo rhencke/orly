@@ -110,6 +110,9 @@ Many Deaths").  Reasons:
 - [ ] All game state (player position, orientation, velocity, entity state)
       lives in Rocq.  JavaScript reads render snapshots; it never independently
       tracks or recomputes game state.
+- [ ] `theories/GameState.v` includes executable proofs/examples for the control
+      contract: pitch clamping, yaw-relative movement, conflicting-axis
+      cancellation, grounded jumping, and airborne gravity.
 - [ ] The Rocq theories that power the running game are visible and
       step-through-able in the JsCoq IDE panel on the same page.
 - [ ] `make test` (CI: `rocq compile`) passes with the game-core theories in

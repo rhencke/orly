@@ -1027,6 +1027,18 @@ Lemma step_pitch_clamps_high :
   step_pitch 10%Q 100%Q = pitch_limit.
 Proof. vm_compute. reflexivity. Qed.
 
+Lemma step_pitch_clamps_low :
+  step_pitch (-10)%Q (-100)%Q = (- pitch_limit)%Q.
+Proof. vm_compute. reflexivity. Qed.
+
+Lemma step_world_turn_then_move_example :
+  let pos :=
+    gs_position
+      (step_world game_state_init
+        (mk_input_snapshot true false false false false 90%Q 0%Q 1000)) in
+  v3_x pos == 0 /\ v3_y pos == 320 /\ v3_z pos == 0.
+Proof. vm_compute. repeat split; reflexivity. Qed.
+
 Lemma step_world_forward_example :
   let pos :=
     gs_position
@@ -1042,6 +1054,23 @@ Lemma step_world_right_at_ninety_example :
         (mk_game_state vec3_zero vec3_zero 90%Q 0 true [] 0)
         (mk_input_snapshot false false false true false 0%Q 0%Q 1000)) in
   v3_x pos == -320 /\ v3_y pos == 0 /\ v3_z pos == 0.
+Proof. vm_compute. repeat split; reflexivity. Qed.
+
+Lemma step_world_conflicting_axes_cancel_example :
+  let pos :=
+    gs_position
+      (step_world game_state_init
+        (mk_input_snapshot true true true true false 0%Q 0%Q 1000)) in
+  v3_x pos == 0 /\ v3_y pos == 0 /\ v3_z pos == 0.
+Proof. vm_compute. repeat split; reflexivity. Qed.
+
+Lemma step_world_zero_dt_preserves_position_example :
+  let pos :=
+    gs_position
+      (step_world
+        (mk_game_state (mk_vec3 5 6 7) vec3_zero 0 0 true [] 0)
+        (mk_input_snapshot true false false false false 0%Q 0%Q 0)) in
+  v3_x pos == 5 /\ v3_y pos == 6 /\ v3_z pos == 7.
 Proof. vm_compute. repeat split; reflexivity. Qed.
 
 (** Helper: [Z.pos p] is never [<=? 0]. *)
@@ -1129,6 +1158,16 @@ Lemma step_world_in_world_empty_applies_gravity :
       (mk_input_snapshot false false false false false 0%Q 0%Q 1000) in
   v3_z (gs_position stepped) == -800 /\ gs_on_ground stepped = false.
 Proof. vm_compute. split; reflexivity. Qed.
+
+Lemma step_world_in_world_grounded_jump_example :
+  let stepped :=
+    step_world_in_world sample_floor_world
+      (mk_game_state (mk_vec3 0 0 17) vec3_zero 0 0 false [] 0)
+      (mk_input_snapshot false false false false true 0%Q 0%Q 100) in
+  v3_z (gs_position stepped) == 44 /\
+  v3_z (gs_velocity stepped) == jump_speed /\
+  gs_on_ground stepped = false.
+Proof. vm_compute. repeat split; reflexivity. Qed.
 
 Lemma brush_blocks_playerb_sample_solid :
   brush_blocks_playerb [sample_solid_texture] (mk_collision_brush_input 0 6 0) = true.

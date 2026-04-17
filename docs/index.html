@@ -117,6 +117,14 @@
       background:
         radial-gradient(circle at center, rgb(13 17 30 / 74%), rgb(0 0 0 / 92%));
     }
+    #game-placeholder .title-row {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+      max-width: min(32rem, calc(100% - 2rem));
+    }
     #game-placeholder .label {
       font-size: 1.5rem;
       color: #f3f7ff;
@@ -125,6 +133,42 @@
       max-width: min(28rem, calc(100% - 2rem));
       color: #b7c4db;
       line-height: 1.45;
+    }
+    #copy-error-report {
+      padding: 0.45rem 0.85rem;
+      border: 1px solid rgb(255 180 180 / 36%);
+      border-radius: 999px;
+      background: rgb(39 11 11 / 72%);
+      color: #ffe0e0;
+      font: inherit;
+      font-size: 0.82rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      pointer-events: auto;
+      cursor: pointer;
+    }
+    #copy-error-report:hover {
+      background: rgb(65 18 18 / 80%);
+      border-color: rgb(255 180 180 / 54%);
+    }
+    #copy-error-report:focus-visible {
+      outline: 2px solid #ffd3d3;
+      outline-offset: 2px;
+    }
+    #error-copy-fallback {
+      width: min(34rem, calc(100% - 2rem));
+      min-height: 11rem;
+      padding: 0.85rem;
+      border: 1px solid rgb(255 180 180 / 28%);
+      border-radius: 0.75rem;
+      background: rgb(18 6 6 / 92%);
+      color: #ffe7e7;
+      font: 0.78rem/1.45 ui-monospace, SFMono-Regular, SFMono-Regular, Consolas, monospace;
+      resize: vertical;
+      pointer-events: auto;
+    }
+    #error-copy-fallback::selection {
+      background: rgb(160 196 255 / 36%);
     }
     #game-placeholder[data-state="error"] .label {
       color: #ffb4b4;
@@ -474,10 +518,25 @@
           </div>
         </div>
         <div id="game-placeholder" data-state="loading" aria-live="polite">
-          <span class="label" data-placeholder-role="title">Loading browser shell…</span>
+          <div class="title-row">
+            <span class="label" data-placeholder-role="title">Loading browser shell…</span>
+            <button
+              id="copy-error-report"
+              type="button"
+              data-placeholder-role="copy-button"
+              hidden
+            >Copy</button>
+          </div>
           <span class="detail" data-placeholder-role="detail">
             Booting JsCoq and checking whether a playable BSP is available.
           </span>
+          <textarea
+            id="error-copy-fallback"
+            data-placeholder-role="copy-fallback"
+            aria-label="Selectable error report text"
+            readonly
+            hidden
+          ></textarea>
         </div>
     </div>
 
@@ -515,6 +574,14 @@
       gamePlaceholder.querySelector('[data-placeholder-role="title"]');
     const placeholderDetail =
       gamePlaceholder.querySelector('[data-placeholder-role="detail"]');
+    const copyErrorButton =
+      gamePlaceholder.querySelector('[data-placeholder-role="copy-button"]');
+    const copyFallback =
+      gamePlaceholder.querySelector('[data-placeholder-role="copy-fallback"]');
+
+    const COPY_BUTTON_LABEL = 'Copy';
+    const COPY_BUTTON_COPIED_LABEL = 'Copied!';
+    let copyFeedbackTimeoutId = null;
 
     function textOrEmpty(value) {
       return value == null ? '' : String(value);
@@ -638,8 +705,116 @@
       }
     }
 
+    function clearCopyFeedbackTimer() {
+      if (copyFeedbackTimeoutId !== null) {
+        window.clearTimeout(copyFeedbackTimeoutId);
+        copyFeedbackTimeoutId = null;
+      }
+    }
+
+    function resetErrorCopyUi() {
+      clearCopyFeedbackTimer();
+      copyErrorButton.textContent = COPY_BUTTON_LABEL;
+      copyFallback.hidden = true;
+      copyFallback.value = '';
+    }
+
+    function syncErrorCopyUi() {
+      const hasErrorReport =
+        gamePlaceholder.dataset.state === 'error' && window.orlyErrorReport !== null;
+      copyErrorButton.hidden = !hasErrorReport;
+      if (!hasErrorReport) resetErrorCopyUi();
+    }
+
+    function formatErrorLocation(location) {
+      if (!location) return 'unknown';
+      const parts = [];
+      const url = firstNonEmptyText(location.url);
+      if (url.length > 0) parts.push(url);
+      if (Number.isInteger(location.line)) parts.push(`line ${location.line}`);
+      if (Number.isInteger(location.column)) parts.push(`column ${location.column}`);
+      return parts.length > 0 ? parts.join(', ') : 'unknown';
+    }
+
+    function formatBuildMetadata(build) {
+      const buildInfo = normalizeBuildInfo(build) ?? DEFAULT_BUILD_INFO;
+      const lines = [
+        `Build version: ${buildInfo.version}`,
+        `Build git SHA: ${buildInfo.gitSha}`,
+        `Build timestamp: ${buildInfo.builtAt}`,
+        `Build source: ${buildInfo.source}`,
+      ];
+      const loadError = firstNonEmptyText(build?.loadError);
+      if (loadError.length > 0) {
+        lines.push(`Build metadata load error: ${loadError}`);
+      }
+      return lines;
+    }
+
+    function formatErrorReportForClipboard(report = window.orlyErrorReport) {
+      if (!report) return '';
+      const raw = firstNonEmptyText(report.raw);
+      const stack = firstNonEmptyText(report.stack);
+      const lines = [
+        '```text',
+        `Title: ${firstNonEmptyText(report.title, 'Unknown title')}`,
+        `Status: ${firstNonEmptyText(report.status, 'Unknown status')}`,
+        `Message: ${firstNonEmptyText(report.message, 'Unknown error')}`,
+        `Source: ${firstNonEmptyText(report.source, 'unknown')}`,
+        `Captured at: ${firstNonEmptyText(report.capturedAt, 'unknown')}`,
+        `Page URL: ${window.location.href}`,
+        `User agent: ${navigator.userAgent}`,
+        ...formatBuildMetadata(report.build),
+        `Location: ${formatErrorLocation(report.location)}`,
+        '',
+        'Stack trace:',
+        stack.length > 0 ? stack : '(missing)',
+      ];
+      if (raw.length > 0 && raw !== stack) {
+        lines.push('', 'Raw error:', raw);
+      }
+      lines.push('```');
+      return lines.join('\n');
+    }
+
+    function showCopyFallback(text) {
+      copyFallback.value = text;
+      copyFallback.hidden = false;
+      copyFallback.focus();
+      copyFallback.select();
+      copyFallback.setSelectionRange(0, text.length);
+    }
+
+    function showCopiedFeedback() {
+      clearCopyFeedbackTimer();
+      copyErrorButton.textContent = COPY_BUTTON_COPIED_LABEL;
+      copyFeedbackTimeoutId = window.setTimeout(() => {
+        copyErrorButton.textContent = COPY_BUTTON_LABEL;
+        copyFeedbackTimeoutId = null;
+      }, 1000);
+    }
+
+    async function copyCurrentErrorReport() {
+      const text = formatErrorReportForClipboard();
+      if (text.length === 0) return;
+      if (typeof navigator.clipboard?.writeText === 'function') {
+        try {
+          await navigator.clipboard.writeText(text);
+          copyFallback.hidden = true;
+          copyFallback.value = '';
+          showCopiedFeedback();
+          return;
+        } catch (err) {
+          console.warn('Clipboard write failed, falling back to selectable text:', err);
+        }
+      }
+      copyErrorButton.textContent = COPY_BUTTON_LABEL;
+      showCopyFallback(text);
+    }
+
     function clearErrorReport() {
       window.orlyErrorReport = null;
+      syncErrorCopyUi();
     }
 
     function captureErrorReport({
@@ -662,6 +837,8 @@
         showStatus(report.status, 'error');
       }
       showPlaceholder(report.title, report.message, 'error');
+      resetErrorCopyUi();
+      syncErrorCopyUi();
       return report;
     }
 
@@ -674,6 +851,7 @@
       placeholderDetail.textContent = safeDetail;
       placeholderDetail.hidden = safeDetail.length === 0;
       if (state !== 'error') clearErrorReport();
+      else syncErrorCopyUi();
     }
 
     function hidePlaceholder() {
@@ -696,6 +874,9 @@
 
     window.orlyBuildInfo = await loadBuildInfo();
     clearErrorReport();
+    copyErrorButton.addEventListener('click', () => {
+      void copyCurrentErrorReport();
+    });
 
     const GAME_TICK_MS = 16;
     const MAX_FRAME_DT_MS = 100;

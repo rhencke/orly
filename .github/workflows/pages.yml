@@ -40,9 +40,17 @@ jobs:
 
       - name: Verify licensed Pages map artifact
         run: |
+          expected_sha256='dc86e859e7f4eeadc734308bbd68326b32e9ab2532c316b252ec944ff03a5ce4'
+          expected_size='1235124'
+          actual_sha256="$(sha256sum docs/assets/maps/am_lavaarena.bsp | awk '{print $1}')"
+          actual_size="$(stat -c %s docs/assets/maps/am_lavaarena.bsp)"
+
           test -f docs/assets/manifest.json
           test -f docs/assets/maps/am_lavaarena.bsp
           grep -Fx '  "maps/am_lavaarena.bsp"' docs/assets/manifest.json
+          test "$actual_sha256" = "$expected_sha256"
+          test "$actual_size" = "$expected_size"
+          cmp --silent docs/vendor/maps/openarena/am_lavaarena.bsp docs/assets/maps/am_lavaarena.bsp
           test ! -e docs/assets/maps/q3dm1.bsp
 
       - name: Upload Pages artifact

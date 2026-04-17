@@ -581,6 +581,8 @@
 
     const COPY_BUTTON_LABEL = 'Copy';
     const COPY_BUTTON_COPIED_LABEL = 'Copied!';
+    const DEFAULT_ROCQ_SYNC_TIMEOUT_MS = 15000;
+    const MAX_ROCQ_SYNC_EVENT_HISTORY = 8;
     let copyFeedbackTimeoutId = null;
 
     function textOrEmpty(value) {
@@ -594,6 +596,16 @@
       }
       return '';
     }
+
+    function parsePositiveInt(value, fallback) {
+      const parsed = Number.parseInt(textOrEmpty(value).trim(), 10);
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+    }
+
+    const ROCQ_SYNC_TIMEOUT_MS = parsePositiveInt(
+      new URL(window.location.href).searchParams.get('rocq_sync_timeout_ms'),
+      DEFAULT_ROCQ_SYNC_TIMEOUT_MS
+    );
 
     function stringifyErrorValue(value) {
       if (value == null) return '';
@@ -661,6 +673,177 @@
 
     function errorDetail(value, fallback = 'Unknown error') {
       return normalizeErrorReport(value, fallback).message;
+    }
+
+    function summarizeWorldForSyncDiagnostics(world) {
+      return {
+        entityCount: Array.isArray(world?.entities) ? world.entities.length : 0,
+        faceCount: Array.isArray(world?.faces) ? world.faces.length : 0,
+        textureCount: Array.isArray(world?.textures) ? world.textures.length : 0,
+        planeCount: Array.isArray(world?.planes) ? world.planes.length : 0,
+        modelCount: Array.isArray(world?.models) ? world.models.length : 0,
+        brushCount: Array.isArray(world?.brushes) ? world.brushes.length : 0,
+        brushSideCount: Array.isArray(world?.brushSides) ? world.brushSides.length : 0,
+      };
+    }
+
+    function cloneRocqSyncEvent(value) {
+      if (typeof value !== 'object' || value === null) return null;
+      const payload = value.payload;
+      return {
+        stage: firstNonEmptyText(value.stage, 'unknown'),
+        at: firstNonEmptyText(value.at),
+        payload:
+          typeof payload === 'object' && payload !== null
+            ? JSON.parse(JSON.stringify(payload))
+            : payload ?? null,
+      };
+    }
+
+    function cloneRocqSyncDiagnostics(value = window.orlyRocqSyncDiagnostics) {
+      if (typeof value !== 'object' || value === null) return null;
+      const request =
+        typeof value.request === 'object' && value.request !== null
+          ? { ...value.request }
+          : null;
+      const lastEvent = cloneRocqSyncEvent(value.lastEvent);
+      const events = Array.isArray(value.events)
+        ? value.events.map(cloneRocqSyncEvent).filter(Boolean)
+        : [];
+      return {
+        timeoutMs: parsePositiveInt(value.timeoutMs, ROCQ_SYNC_TIMEOUT_MS),
+        state: firstNonEmptyText(value.state, 'idle'),
+        mapLabel: firstNonEmptyText(value.mapLabel),
+        startedAt: firstNonEmptyText(value.startedAt),
+        finishedAt: firstNonEmptyText(value.finishedAt),
+        request,
+        lastEvent,
+        events,
+      };
+    }
+
+    function ensureRocqSyncDiagnostics() {
+      if (!cloneRocqSyncDiagnostics()) {
+        window.orlyRocqSyncDiagnostics = {
+          timeoutMs: ROCQ_SYNC_TIMEOUT_MS,
+          state: 'idle',
+          mapLabel: '',
+          startedAt: '',
+          finishedAt: '',
+          request: null,
+          lastEvent: null,
+          events: [],
+        };
+      }
+      return window.orlyRocqSyncDiagnostics;
+    }
+
+    function resetRocqSyncDiagnostics() {
+      window.orlyRocqSyncDiagnostics = {
+        timeoutMs: ROCQ_SYNC_TIMEOUT_MS,
+        state: 'idle',
+        mapLabel: '',
+        startedAt: '',
+        finishedAt: '',
+        request: null,
+        lastEvent: null,
+        events: [],
+      };
+    }
+
+    function beginRocqSyncDiagnostics(mapLabel, world) {
+      window.orlyRocqSyncDiagnostics = {
+        timeoutMs: ROCQ_SYNC_TIMEOUT_MS,
+        state: 'waiting',
+        mapLabel: firstNonEmptyText(mapLabel),
+        startedAt: new Date().toISOString(),
+        finishedAt: '',
+        request: summarizeWorldForSyncDiagnostics(world),
+        lastEvent: null,
+        events: [],
+      };
+    }
+
+    function recordRocqSyncDiagnostic(event) {
+      const diagnostics = ensureRocqSyncDiagnostics();
+      const normalized = cloneRocqSyncEvent(event);
+      if (!normalized) return;
+      diagnostics.lastEvent = normalized;
+      diagnostics.events = [
+        ...diagnostics.events.slice(-(MAX_ROCQ_SYNC_EVENT_HISTORY - 1)),
+        normalized,
+      ];
+    }
+
+    function finishRocqSyncDiagnostics(state) {
+      const diagnostics = ensureRocqSyncDiagnostics();
+      diagnostics.state = firstNonEmptyText(state, diagnostics.state, 'idle');
+      diagnostics.finishedAt = new Date().toISOString();
+    }
+
+    function formatRocqSyncDuration(durationMs) {
+      if (!Number.isFinite(durationMs) || durationMs < 1000) {
+        return `${Math.max(0, Math.round(durationMs || 0))} ms`;
+      }
+      return durationMs >= 10000
+        ? `${Math.round(durationMs / 1000)}s`
+        : `${(durationMs / 1000).toFixed(1)}s`;
+    }
+
+    function summarizeRocqSyncPayload(payload, limit = 140) {
+      const text = firstNonEmptyText(stringifyErrorValue(payload), '(missing)');
+      const compact = text.replace(/\s+/g, ' ').trim();
+      if (compact.length <= limit) return compact;
+      return `${compact.slice(0, Math.max(0, limit - 3))}...`;
+    }
+
+    function formatRocqSyncRequestCounts(request) {
+      if (!request) return '(missing)';
+      return [
+        `entities=${request.entityCount ?? 0}`,
+        `faces=${request.faceCount ?? 0}`,
+        `textures=${request.textureCount ?? 0}`,
+        `planes=${request.planeCount ?? 0}`,
+        `models=${request.modelCount ?? 0}`,
+        `brushes=${request.brushCount ?? 0}`,
+        `brushSides=${request.brushSideCount ?? 0}`,
+      ].join(', ');
+    }
+
+    function createRocqSyncTimeoutError() {
+      const diagnostics = cloneRocqSyncDiagnostics();
+      const startedAtMs = Date.parse(diagnostics?.startedAt ?? '');
+      const durationMs = Number.isFinite(startedAtMs)
+        ? Math.max(ROCQ_SYNC_TIMEOUT_MS, Date.now() - startedAtMs)
+        : ROCQ_SYNC_TIMEOUT_MS;
+      const lastEvent = diagnostics?.lastEvent ?? null;
+      const lastEventText = lastEvent
+        ? `Last bridge event: ${lastEvent.stage} (${summarizeRocqSyncPayload(lastEvent.payload, 96)}).`
+        : 'No Rocq bridge payload arrived before the timeout.';
+      const requestText = diagnostics?.request
+        ? ` Request counts: ${formatRocqSyncRequestCounts(diagnostics.request)}.`
+        : '';
+      const error = new Error(
+        `Timed out after ${formatRocqSyncDuration(durationMs)} waiting for Rocq to build ` +
+        `the initial render snapshot. ${lastEventText}${requestText} Use Copy for full diagnostics.`
+      );
+      error.name = 'RocqSyncTimeoutError';
+      error.diagnostics = diagnostics;
+      return error;
+    }
+
+    async function withTimeout(promise, timeoutMs, createError) {
+      let timeoutId = null;
+      try {
+        return await Promise.race([
+          promise,
+          new Promise((_, reject) => {
+            timeoutId = window.setTimeout(() => reject(createError()), timeoutMs);
+          }),
+        ]);
+      } finally {
+        if (timeoutId !== null) window.clearTimeout(timeoutId);
+      }
     }
 
     const DEFAULT_BUILD_INFO = Object.freeze({
@@ -751,6 +934,41 @@
       return lines;
     }
 
+    function formatRocqSyncDiagnosticsForClipboard(diagnostics) {
+      const syncDiagnostics = cloneRocqSyncDiagnostics(diagnostics);
+      if (!syncDiagnostics) return [];
+      const lines = [
+        '',
+        'Rocq sync diagnostics:',
+        `Timeout: ${syncDiagnostics.timeoutMs} ms`,
+        `State: ${syncDiagnostics.state}`,
+        `Map: ${firstNonEmptyText(syncDiagnostics.mapLabel, '(unknown)')}`,
+        `Started at: ${firstNonEmptyText(syncDiagnostics.startedAt, '(unknown)')}`,
+      ];
+      if (syncDiagnostics.finishedAt.length > 0) {
+        lines.push(`Finished at: ${syncDiagnostics.finishedAt}`);
+      }
+      if (syncDiagnostics.request) {
+        lines.push(`Request counts: ${formatRocqSyncRequestCounts(syncDiagnostics.request)}`);
+      }
+      if (syncDiagnostics.lastEvent) {
+        lines.push(`Last bridge event: ${syncDiagnostics.lastEvent.stage}`);
+        lines.push(`Last bridge payload: ${summarizeRocqSyncPayload(syncDiagnostics.lastEvent.payload, 240)}`);
+      } else {
+        lines.push('Last bridge event: (none)');
+      }
+      if (syncDiagnostics.events.length > 0) {
+        lines.push('', 'Recent bridge events:');
+        for (const event of syncDiagnostics.events) {
+          lines.push(
+            `- ${firstNonEmptyText(event.at, '(unknown time)')} ${event.stage}: ` +
+            `${summarizeRocqSyncPayload(event.payload, 180)}`
+          );
+        }
+      }
+      return lines;
+    }
+
     function formatErrorReportForClipboard(report = window.orlyErrorReport) {
       if (!report) return '';
       const raw = firstNonEmptyText(report.raw);
@@ -766,6 +984,7 @@
         `User agent: ${navigator.userAgent}`,
         ...formatBuildMetadata(report.build),
         `Location: ${formatErrorLocation(report.location)}`,
+        ...formatRocqSyncDiagnosticsForClipboard(report.diagnostics),
         '',
         'Stack trace:',
         stack.length > 0 ? stack : '(missing)',
@@ -823,7 +1042,12 @@
       status,
       error,
       fallback = 'Unknown error',
+      diagnostics = null,
     }) {
+      const rocqSyncDiagnostics =
+        cloneRocqSyncDiagnostics(diagnostics) ??
+        cloneRocqSyncDiagnostics(error?.diagnostics) ??
+        null;
       const report = {
         source: textOrEmpty(source),
         title: textOrEmpty(title),
@@ -832,6 +1056,9 @@
         build: currentBuildInfo(),
         ...normalizeErrorReport(error, fallback),
       };
+      if (rocqSyncDiagnostics) {
+        report.diagnostics = rocqSyncDiagnostics;
+      }
       window.orlyErrorReport = report;
       if (report.status.length > 0) {
         showStatus(report.status, 'error');
@@ -873,6 +1100,7 @@
     }
 
     window.orlyBuildInfo = await loadBuildInfo();
+    resetRocqSyncDiagnostics();
     clearErrorReport();
     copyErrorButton.addEventListener('click', () => {
       void copyCurrentErrorReport();
@@ -1037,7 +1265,9 @@
           all_pkgs:      ['coq'],
         }
       );
-      rocqBridge = createRocqBridge(coq);
+      rocqBridge = createRocqBridge(coq, {
+        onDiagnostic: recordRocqSyncDiagnostic,
+      });
       jscoqOk = true;
     } catch (err) {
       const msg = errorDetail(err);
@@ -1135,7 +1365,7 @@
           'Syncing Rocq render state…',
           'Building the initial render snapshot from the verified game core.'
         );
-        const initialSnapshot = await rocqBridge.load_world({
+        const rocqSyncWorld = {
           entities: bsp.entities,
           faces: bsp.faces,
           textures: bsp.textures,
@@ -1143,7 +1373,20 @@
           models: bsp.models,
           brushes: bsp.brushes,
           brushSides: bsp.brushSides,
-        });
+        };
+        beginRocqSyncDiagnostics(selectedMapLabel, rocqSyncWorld);
+        let initialSnapshot;
+        try {
+          initialSnapshot = await withTimeout(
+            rocqBridge.load_world(rocqSyncWorld),
+            ROCQ_SYNC_TIMEOUT_MS,
+            createRocqSyncTimeoutError
+          );
+          finishRocqSyncDiagnostics('ready');
+        } catch (err) {
+          finishRocqSyncDiagnostics(err?.name === 'RocqSyncTimeoutError' ? 'timed-out' : 'failed');
+          throw err;
+        }
 
         showStatus('Loading shaders…');
         showPlaceholder(
@@ -1246,11 +1489,13 @@
       } catch (err) {
         console.error('BSP render init failed:', err);
         const msg = errorDetail(err);
+        const isRocqSyncTimeout = err?.name === 'RocqSyncTimeoutError';
         captureErrorReport({
-          source: 'render-startup',
-          title: 'Render startup failed',
-          status: `Render error: ${msg}`,
+          source: isRocqSyncTimeout ? 'rocq-sync-timeout' : 'render-startup',
+          title: isRocqSyncTimeout ? 'Rocq render sync timed out' : 'Render startup failed',
+          status: isRocqSyncTimeout ? `Rocq sync timeout: ${msg}` : `Render error: ${msg}`,
           error: err,
+          diagnostics: cloneRocqSyncDiagnostics(),
         });
       }
     }

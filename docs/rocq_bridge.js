@@ -229,6 +229,43 @@ function cloneSnapshot(snapshot) {
   };
 }
 
+function summarizeWorld(world) {
+  return {
+    entityCount: Array.isArray(world?.entities) ? world.entities.length : 0,
+    faceCount: Array.isArray(world?.faces) ? world.faces.length : 0,
+    textureCount: Array.isArray(world?.textures) ? world.textures.length : 0,
+    planeCount: Array.isArray(world?.planes) ? world.planes.length : 0,
+    modelCount: Array.isArray(world?.models) ? world.models.length : 0,
+    brushCount: Array.isArray(world?.brushes) ? world.brushes.length : 0,
+    brushSideCount: Array.isArray(world?.brushSides) ? world.brushSides.length : 0,
+  };
+}
+
+function summarizeWordList(words, previewLength = 8) {
+  return {
+    count: words.length,
+    preview: words.slice(0, previewLength),
+  };
+}
+
+function summarizeSnapshot(snapshot) {
+  return {
+    position: { ...snapshot.position },
+    yaw: snapshot.yaw,
+    pitch: snapshot.pitch,
+    visibleFaceCount: snapshot.visibleFaces.length,
+  };
+}
+
+function emitDiagnostic(emit, stage, payload = {}) {
+  if (!emit) return;
+  emit({
+    stage,
+    at: new Date().toISOString(),
+    payload,
+  });
+}
+
 async function waitForSentenceSid(sentence) {
   while (!sentence.coq_sid) {
     await nextTick();
@@ -289,12 +326,14 @@ async function evalStepWorldWords(manager, sid, collisionWorldExpr, gsWords, inp
   return words;
 }
 
-export function createRocqBridge(manager) {
+export function createRocqBridge(manager, options = {}) {
   let bridgeHelpersSidPromise = null;
   let gsWords = null;        // current game-state word list
   let initialGsWords = null; // snapshot saved at load_world for reset()
   let visibleFaces = null;   // static visible-face indices (no PVS yet)
   let collisionWorldExpr = null;
+  const onDiagnostic =
+    typeof options.onDiagnostic === 'function' ? options.onDiagnostic : null;
 
   function getBridgeHelpersSid() {
     bridgeHelpersSidPromise ||= ensureBridgeHelpersReady(manager);
@@ -309,16 +348,27 @@ export function createRocqBridge(manager) {
     version: BRIDGE_VERSION,
 
     async load_world(world) {
+      emitDiagnostic(onDiagnostic, 'load_world:requested', summarizeWorld(world));
       const sid = await getBridgeHelpersSid();
-      const [words, faces] = await Promise.all([
-        evalInitialGameStateWords(manager, sid, world),
-        evalVisibleFaces(manager, sid, world),
-      ]);
+      emitDiagnostic(onDiagnostic, 'load_world:helpers-ready', { sid });
+      const wordsPromise = evalInitialGameStateWords(manager, sid, world)
+        .then(words => {
+          emitDiagnostic(onDiagnostic, 'load_world:game-state-words', summarizeWordList(words));
+          return words;
+        });
+      const facesPromise = evalVisibleFaces(manager, sid, world)
+        .then(faces => {
+          emitDiagnostic(onDiagnostic, 'load_world:visible-faces', summarizeWordList(faces));
+          return faces;
+        });
+      const [words, faces] = await Promise.all([wordsPromise, facesPromise]);
       collisionWorldExpr = formatCollisionWorld(world);
       gsWords        = words;
       initialGsWords = [...words];
       visibleFaces   = faces;
-      return snapshotFromGameStateWords(gsWords, visibleFaces);
+      const snapshot = snapshotFromGameStateWords(gsWords, visibleFaces);
+      emitDiagnostic(onDiagnostic, 'load_world:complete', summarizeSnapshot(snapshot));
+      return snapshot;
     },
 
     async step(inputSnapshot) {

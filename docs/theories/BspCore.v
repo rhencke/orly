@@ -668,6 +668,21 @@ Definition extract_snapshot (gs : game_state) : render_snapshot :=
     []                (* visible faces — PVS/culling not yet implemented *)
     (map (fun es => (es_entity_index es, es_origin es)) (gs_entities gs)).
 
+(** Serialize a rational as numerator/denominator [Z] words so the
+    JS bridge can decode camera state without parsing Rocq internals. *)
+Definition q_words (q : Q) : list Z :=
+  [Qnum q; Z.pos (Qden q)].
+
+(** Serialize the camera portion of a render snapshot as five rational
+    values: position xyz, yaw, and pitch. *)
+Definition render_snapshot_camera_words (rs : render_snapshot) : list Z :=
+  let pos := rs_camera_pos rs in
+  q_words (v3_x pos) ++
+  q_words (v3_y pos) ++
+  q_words (v3_z pos) ++
+  q_words (rs_camera_yaw rs) ++
+  q_words (rs_camera_pitch rs).
+
 (* ------------------------------------------------------------------ *)
 (** ** Correctness lemmas                                               *)
 (* ------------------------------------------------------------------ *)
@@ -725,6 +740,14 @@ Proof. reflexivity. Qed.
 Lemma extract_snapshot_camera_pitch : forall gs,
   rs_camera_pitch (extract_snapshot gs) = gs_pitch gs.
 Proof. reflexivity. Qed.
+
+(** Camera-word serialization always yields five rational pairs. *)
+Lemma render_snapshot_camera_words_length : forall rs,
+  length (render_snapshot_camera_words rs) = 10%nat.
+Proof.
+  intros rs. unfold render_snapshot_camera_words, q_words.
+  simpl. reflexivity.
+Qed.
 
 (* ------------------------------------------------------------------ *)
 (** ** Spawn-point extraction from entity data                          *)
@@ -810,6 +833,13 @@ Definition game_state_from_entities (entities : list bsp_entity)
   | None            => game_state_init
   end.
 
+(** End-to-end helper for the browser bridge: derive the initial camera
+    words directly from parsed entity data. *)
+Definition initial_camera_words_from_entities (entities : list bsp_entity)
+    : list Z :=
+  render_snapshot_camera_words
+    (extract_snapshot (game_state_from_entities entities)).
+
 (* ------------------------------------------------------------------ *)
 (** ** Correctness lemmas for spawn-point selection                     *)
 (* ------------------------------------------------------------------ *)
@@ -862,4 +892,12 @@ Proof.
   intros entities. unfold game_state_from_entities.
   destruct (select_spawn_point entities) as [[[px py pz] yaw] |];
     reflexivity.
+Qed.
+
+(** The bridge helper always yields the five serialized camera values. *)
+Lemma initial_camera_words_from_entities_length : forall entities,
+  length (initial_camera_words_from_entities entities) = 10%nat.
+Proof.
+  intros entities. unfold initial_camera_words_from_entities.
+  apply render_snapshot_camera_words_length.
 Qed.

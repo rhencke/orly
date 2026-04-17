@@ -264,7 +264,7 @@
   <script type="module">
     import { parseBsp } from './bsp.js';
     import { createRenderer, mat4Perspective } from './renderer.js';
-    import { createFlyCamera } from './camera.js';
+    import { createRocqBridge } from './rocq_bridge.js';
     import { loadShadersFromAssets } from './shaders.js';
 
     // ── status bar helpers ───────────────────────────────────────
@@ -378,6 +378,7 @@
     }
 
     let jscoqOk = false;
+    let rocqBridge = null;
     showStatus('Loading JsCoq and game theories…');
     try {
       // Fetch the JsCoq module and the game theory file in parallel —
@@ -395,7 +396,7 @@
       }
 
       showStatus('Starting Rocq kernel…');
-      JsCoq.start(
+      const coq = await JsCoq.start(
         JSCOQ_CDN,
         ['.coq-code'],
         {
@@ -406,6 +407,7 @@
           all_pkgs:      ['coq'],
         }
       );
+      rocqBridge = createRocqBridge(coq);
       jscoqOk = true;
     } catch (err) {
       showStatus(`Failed to load JsCoq: ${err.message}`, 'error');
@@ -446,24 +448,6 @@
                     `${bsp.vertices.length} vertices, ` +
                     `${bsp.lightmaps.length} lightmaps`);
 
-        // Find a spawn point from BSP entities for initial camera
-        const spawn = bsp.entities.find(e =>
-          e.get('classname') === 'info_player_deathmatch');
-        let eyeX = 0, eyeY = 0, eyeZ = 0, yawDeg = 0;
-        if (spawn) {
-          const origin = spawn.get('origin');
-          if (origin) {
-            const parts = origin.split(/\s+/).map(Number);
-            eyeX = parts[0] || 0;
-            eyeY = parts[1] || 0;
-            eyeZ = parts[2] || 0;
-            // Q3 stores eye height ~56 units above spawn origin
-            eyeZ += 56;
-          }
-          const angle = spawn.get('angle');
-          if (angle) yawDeg = Number(angle) || 0;
-        }
-
         showStatus('Loading shaders…');
         const shaderDefs = await loadShadersFromAssets(window.orlyAssets);
         console.log(`orly: loaded ${shaderDefs.size} shader definitions`);
@@ -475,34 +459,33 @@
           assetBasePath: 'assets/',
         });
 
-        // Create fly camera at the spawn point
-        // Click canvas to engage pointer lock; WASD to move, mouse to look
-        const cam = createFlyCamera(canvas, {
-          x: eyeX, y: eyeY, z: eyeZ, yaw: yawDeg,
-        });
+        if (!rocqBridge) {
+          throw new Error('Rocq bridge is unavailable');
+        }
+
+        showStatus('Syncing Rocq camera state…');
+        const initialSnapshot = await rocqBridge.load_world(bsp.entities);
 
         // Hide the placeholder — WebGL is live
         document.getElementById('game-placeholder').hidden = true;
 
         const projMatrix = new Float32Array(16);
-        let lastTime = 0;
 
-        function frame(now) {
-          const dt = lastTime ? (now - lastTime) / 1000 : 0;
-          lastTime = now;
-
-          cam.update(dt);
-
+        async function frame() {
+          const snapshot = await rocqBridge.step(null);
           // Update projection each frame to track canvas resize
           const aspect = canvas.width / canvas.height || 1;
           mat4Perspective(projMatrix, Math.PI / 2, aspect, 1.0, 4096.0);
-          renderer.render(cam.viewMatrix, projMatrix);
+          renderer.render(snapshot.viewMatrix, projMatrix);
           requestAnimationFrame(frame);
         }
+        const initialAspect = canvas.width / canvas.height || 1;
+        mat4Perspective(projMatrix, Math.PI / 2, initialAspect, 1.0, 4096.0);
+        renderer.render(initialSnapshot.viewMatrix, projMatrix);
         requestAnimationFrame(frame);
 
         clearStatus();
-        console.log('orly: render pipeline active — click canvas to fly');
+        console.log('orly: render pipeline active — camera seeded from Rocq state');
       } catch (err) {
         console.error('BSP render init failed:', err);
         showStatus(`Render error: ${err.message}`, 'error');

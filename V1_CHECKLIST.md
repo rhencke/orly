@@ -63,11 +63,15 @@ investigation proves one is unexpectedly required for the acceptance path:
       on Android) without errors.
 - [ ] JsCoq boots, the Rocq kernel starts, and the IDE panel shows the
       game-core theories loading.
-- [ ] The BSP and texture assets for q3dm1 load from the site build
-      reproducibly — no manual file-copy steps, no ad hoc paths.
+- [ ] The public GitHub Pages shell handles the no-assets path cleanly:
+      q3dm1 content is absent by default, but the page stays usable and tells
+      the user how to provide demo assets locally.
+- [ ] The BSP and texture assets for q3dm1 load reproducibly from a
+      user-supplied Quake 3 Arena Demo package via the documented `make assets`
+      flow — no manual file-copy steps, no ad hoc paths.
 - [ ] A local reproduction works by following the repo docs alone
-      (`make serve` or equivalent) on both desktop and mobile via local
-      network.
+      (`make assets` + `make serve` or equivalent) on both desktop and mobile
+      via local network.
 
 ### Spawn
 
@@ -133,6 +137,9 @@ investigation proves one is unexpectedly required for the acceptance path:
       small to see what is happening.  The drag-to-resize handle works on touch.
 - [ ] The safe-area insets (`env(safe-area-inset-*)`) keep controls off the
       notch and home-bar area on notched iOS devices.
+- [ ] Browser regression coverage exercises q3dm1 startup on desktop plus
+      mobile portrait and landscape layouts, including touch-control visibility
+      and resize-handle behavior.
 
 ### Rocq-powered core
 

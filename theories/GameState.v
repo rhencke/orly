@@ -1034,16 +1034,30 @@ Qed.
 (** ** World-state serialization and frame stepping                    *)
 (* ------------------------------------------------------------------ *)
 
+(** Number of [Z] words produced per serialized [entity_state]. *)
+Definition entity_state_words_count : nat := 9.
+
 (** Number of [Z] words produced by [game_state_to_words] for a
     game state with an empty entity list. *)
-Definition game_state_words_count : nat := 18.
+Definition game_state_words_count : nat := 19.
+
+Definition entity_state_to_words (es : entity_state) : list Z :=
+  [es_entity_index es; es_model_index es] ++
+  q_words (v3_x (es_origin es)) ++
+  q_words (v3_y (es_origin es)) ++
+  q_words (v3_z (es_origin es)) ++
+  [if es_active es then 1 else 0].
+
+Fixpoint entity_states_to_words (entities : list entity_state) : list Z :=
+  match entities with
+  | [] => []
+  | es :: rest => entity_state_to_words es ++ entity_states_to_words rest
+  end.
 
 (** Serialize a [game_state] to a flat [list Z] suitable for
-    round-tripping through the JS bridge.  The entity list is
-    omitted; v1 entities carry no per-step dynamic state that
-    needs crossing the bridge boundary.
+    round-tripping through the JS bridge.
 
-    Word layout (18 entries):
+    Word layout (19 + 9 * entity_count entries):
     <<
        0  px_num   1  px_den
        2  py_num   3  py_den
@@ -1055,6 +1069,8 @@ Definition game_state_words_count : nat := 18.
       14 pch_num  15 pch_den
       16 on_ground          (0 = airborne, 1 = grounded)
       17 tick
+      18 entity_count
+      19... serialized entity states
     >>
 *)
 Definition game_state_to_words (gs : game_state) : list Z :=
@@ -1067,34 +1083,92 @@ Definition game_state_to_words (gs : game_state) : list Z :=
   q_words (gs_yaw gs) ++
   q_words (gs_pitch gs) ++
   [(if gs_on_ground gs then 1 else 0)] ++
-  [gs_tick gs].
+  [gs_tick gs] ++
+  [Z.of_nat (length (gs_entities gs))] ++
+  entity_states_to_words (gs_entities gs).
+
+Definition entity_state_from_words (ws : list Z)
+    : option (entity_state * list Z) :=
+  match ws with
+  | [entity_index; model_index;
+     ox_n; ox_d; oy_n; oy_d; oz_n; oz_d;
+     active] =>
+      if (ox_d <=? 0) || (oy_d <=? 0) || (oz_d <=? 0)
+      then None
+      else
+        Some
+          ( mk_entity_state
+              entity_index
+              model_index
+              (mk_vec3 (Qmake ox_n (Z.to_pos ox_d))
+                       (Qmake oy_n (Z.to_pos oy_d))
+                       (Qmake oz_n (Z.to_pos oz_d)))
+              (negb (active =? 0))
+          , []
+          )
+  | entity_index :: model_index ::
+    ox_n :: ox_d :: oy_n :: oy_d :: oz_n :: oz_d :: active :: rest =>
+      if (ox_d <=? 0) || (oy_d <=? 0) || (oz_d <=? 0)
+      then None
+      else
+        Some
+          ( mk_entity_state
+              entity_index
+              model_index
+              (mk_vec3 (Qmake ox_n (Z.to_pos ox_d))
+                       (Qmake oy_n (Z.to_pos oy_d))
+                       (Qmake oz_n (Z.to_pos oz_d)))
+              (negb (active =? 0))
+          , rest
+          )
+  | _ => None
+  end.
+
+Fixpoint entity_states_from_words_aux (count : nat) (ws : list Z)
+    : option (list entity_state * list Z) :=
+  match count with
+  | O => Some ([], ws)
+  | S count' =>
+      match entity_state_from_words ws with
+      | Some (es, rest) =>
+          match entity_states_from_words_aux count' rest with
+          | Some (entities, tail) => Some (es :: entities, tail)
+          | None => None
+          end
+      | None => None
+      end
+  end.
 
 (** Reconstruct a [game_state] from the word list produced by
     [game_state_to_words].  Returns [None] on a malformed list or
     any zero/negative denominator. *)
 Definition game_state_from_words (ws : list Z) : option game_state :=
   match ws with
-  | [px_n; px_d; py_n; py_d; pz_n; pz_d;
-     vx_n; vx_d; vy_n; vy_d; vz_n; vz_d;
-     yaw_n; yaw_d; pitch_n; pitch_d;
-     on_ground; tick] =>
+  | px_n :: px_d :: py_n :: py_d :: pz_n :: pz_d ::
+    vx_n :: vx_d :: vy_n :: vy_d :: vz_n :: vz_d ::
+    yaw_n :: yaw_d :: pitch_n :: pitch_d ::
+    on_ground :: tick :: entity_count :: entity_words =>
       if (px_d <=? 0) || (py_d <=? 0) || (pz_d <=? 0) ||
-         (vx_d <=? 0) || (vy_d <=? 0) || (vz_d <=? 0) ||
-         (yaw_d <=? 0) || (pitch_d <=? 0)
+          (vx_d <=? 0) || (vy_d <=? 0) || (vz_d <=? 0) ||
+          (yaw_d <=? 0) || (pitch_d <=? 0) || (entity_count <? 0)
       then None
       else
-        Some (mk_game_state
-          (mk_vec3 (Qmake px_n (Z.to_pos px_d))
-                   (Qmake py_n (Z.to_pos py_d))
-                   (Qmake pz_n (Z.to_pos pz_d)))
-          (mk_vec3 (Qmake vx_n (Z.to_pos vx_d))
-                   (Qmake vy_n (Z.to_pos vy_d))
-                   (Qmake vz_n (Z.to_pos vz_d)))
-          (Qmake yaw_n   (Z.to_pos yaw_d))
-          (Qmake pitch_n (Z.to_pos pitch_d))
-          (negb (on_ground =? 0))
-          []
-          tick)
+        match entity_states_from_words_aux (Z.to_nat entity_count) entity_words with
+        | Some (entities, []) =>
+            Some (mk_game_state
+              (mk_vec3 (Qmake px_n (Z.to_pos px_d))
+                       (Qmake py_n (Z.to_pos py_d))
+                       (Qmake pz_n (Z.to_pos pz_d)))
+              (mk_vec3 (Qmake vx_n (Z.to_pos vx_d))
+                       (Qmake vy_n (Z.to_pos vy_d))
+                       (Qmake vz_n (Z.to_pos vz_d)))
+              (Qmake yaw_n   (Z.to_pos yaw_d))
+              (Qmake pitch_n (Z.to_pos pitch_d))
+              (negb (on_ground =? 0))
+              entities
+              tick)
+        | _ => None
+        end
   | _ => None
   end.
 
@@ -1260,11 +1334,34 @@ Definition initial_game_state_words_from_entities
 (** ** Correctness lemmas for world stepping                           *)
 (* ------------------------------------------------------------------ *)
 
-Lemma game_state_to_words_length : forall gs,
-  length (game_state_to_words gs) = game_state_words_count.
+Lemma entity_state_to_words_length : forall es,
+  length (entity_state_to_words es) = entity_state_words_count.
 Proof.
-  intros gs. unfold game_state_to_words, q_words, game_state_words_count.
+  intros es. unfold entity_state_to_words, q_words, entity_state_words_count.
   repeat rewrite length_app. simpl. reflexivity.
+Qed.
+
+Lemma entity_states_to_words_length : forall entities,
+  length (entity_states_to_words entities) =
+  (entity_state_words_count * length entities)%nat.
+Proof.
+  induction entities as [| es rest IH]; simpl.
+  - reflexivity.
+  - destruct es as [entity_index model_index origin active].
+    destruct origin as [ox oy oz].
+    unfold entity_state_words_count in *. simpl in *.
+    rewrite IH. lia.
+Qed.
+
+Lemma game_state_to_words_length : forall gs,
+  length (game_state_to_words gs) =
+  (game_state_words_count +
+   entity_state_words_count * length (gs_entities gs))%nat.
+Proof.
+  intros [[px py pz] [vx vy vz] yaw pitch grounded entities tick].
+  unfold game_state_to_words, q_words, game_state_words_count, entity_state_words_count.
+  simpl.
+  rewrite entity_states_to_words_length. reflexivity.
 Qed.
 
 (** Stepping integrates position from the per-frame velocity. *)
@@ -1391,10 +1488,12 @@ Proof.
   destruct grounded; reflexivity.
 Qed.
 
-(** Serialized word count matches [game_state_words_count]. *)
+(** Serialized word count includes the per-entity payload. *)
 Lemma initial_game_state_words_from_entities_length : forall entities,
   length (initial_game_state_words_from_entities entities) =
-  game_state_words_count.
+  (game_state_words_count +
+   entity_state_words_count *
+   length (gs_entities (game_state_from_entities entities)))%nat.
 Proof.
   intros entities. unfold initial_game_state_words_from_entities.
   apply game_state_to_words_length.

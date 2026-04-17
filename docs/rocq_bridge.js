@@ -4,7 +4,7 @@ const DEG_TO_RAD = Math.PI / 180;
 const BRIDGE_VERSION = 1;
 const BRIDGE_HELPERS_DEFINITION = 'Definition step_world_words_in_world';
 const CAMERA_WORDS_COUNT = 10;
-const GAME_STATE_WORDS_COUNT = 18;
+const MIN_GAME_STATE_WORDS_COUNT = 19;
 const GEOMETRY_Q_SCALE = 1000000;
 const CONTENTS_SOLID = 1;
 const CONTENTS_PLAYERCLIP = 65536;
@@ -155,6 +155,8 @@ function cameraSnapshotFromWords(words) {
  *   14-15 pitch         (Q rational, num/den)
  *   16    on_ground
  *   17    tick
+ *   18    entity_count
+ *   19... serialized entity states
  */
 function cameraSnapshotFromGameStateWords(words) {
   const toQ = (n, d) => n / d;
@@ -259,9 +261,9 @@ async function evalInitialGameStateWords(manager, sid, world) {
     `${formatEntities(world.entities)}).`;
   const messages = await manager.coq.queryPromise(sid, ['Vernac', command]);
   const words = parseZList(flattenMessages(manager, messages));
-  if (words.length !== GAME_STATE_WORDS_COUNT) {
+  if (words.length < MIN_GAME_STATE_WORDS_COUNT) {
     throw new Error(
-      `expected ${GAME_STATE_WORDS_COUNT} game-state words, got ${words.length}`);
+      `expected at least ${MIN_GAME_STATE_WORDS_COUNT} game-state words, got ${words.length}`);
   }
   return words;
 }
@@ -280,9 +282,9 @@ async function evalStepWorldWords(manager, sid, collisionWorldExpr, gsWords, inp
     `${formatZList(gsWords)} ${formatInputSnapshot(inputSnapshot)}).`;
   const messages = await manager.coq.queryPromise(sid, ['Vernac', command]);
   const words = parseZList(flattenMessages(manager, messages));
-  if (words.length !== GAME_STATE_WORDS_COUNT) {
+  if (words.length < MIN_GAME_STATE_WORDS_COUNT) {
     throw new Error(
-      `expected ${GAME_STATE_WORDS_COUNT} game-state words from step, got ${words.length}`);
+      `expected at least ${MIN_GAME_STATE_WORDS_COUNT} game-state words from step, got ${words.length}`);
   }
   return words;
 }

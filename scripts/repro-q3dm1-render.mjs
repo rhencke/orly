@@ -190,6 +190,8 @@ async function gatherSnapshot(page) {
     const placeholder = document.getElementById('game-placeholder');
     const placeholderTitle = placeholder?.querySelector('[data-placeholder-role="title"]');
     const placeholderDetail = placeholder?.querySelector('[data-placeholder-role="detail"]');
+    const copyButton = placeholder?.querySelector('[data-placeholder-role="copy-button"]');
+    const copyFallback = placeholder?.querySelector('[data-placeholder-role="copy-fallback"]');
     const canvas = document.getElementById('game-canvas');
     const overlay = document.getElementById('game-overlay');
     const main = document.getElementById('main');
@@ -202,6 +204,12 @@ async function gatherSnapshot(page) {
     const desktopHint = document.getElementById('game-hint-desktop');
     const mobileHint = document.getElementById('game-hint-mobile');
     const assetMap = window.orlyAssets instanceof Map ? window.orlyAssets : null;
+    const buildInfo = window.orlyBuildInfo && typeof window.orlyBuildInfo === 'object'
+      ? structuredClone(window.orlyBuildInfo)
+      : null;
+    const errorReport = window.orlyErrorReport && typeof window.orlyErrorReport === 'object'
+      ? structuredClone(window.orlyErrorReport)
+      : null;
 
     function rectOf(element) {
       if (!element) return null;
@@ -261,6 +269,22 @@ async function gatherSnapshot(page) {
             detail: placeholderDetail?.textContent?.trim() ?? '',
           }
         : null,
+      errorCopy: {
+        button: copyButton
+          ? {
+              ...visibilityOf(copyButton),
+              text: copyButton.textContent?.trim() ?? '',
+            }
+          : null,
+        fallback: copyFallback
+          ? {
+              ...visibilityOf(copyFallback),
+              value: copyFallback.value ?? '',
+              selectionStart: copyFallback.selectionStart,
+              selectionEnd: copyFallback.selectionEnd,
+            }
+          : null,
+      },
       canvas: canvas
         ? {
           width: canvas.width,
@@ -301,6 +325,8 @@ async function gatherSnapshot(page) {
         lookPad: rectOf(lookPad),
         jumpButton: rectOf(jumpButton),
       },
+      buildInfo,
+      errorReport,
       assetCount: assetMap?.size ?? null,
       jscoqLoaded: Boolean(document.querySelector('.CodeMirror')),
     };
@@ -622,6 +648,69 @@ function assertMobileRenderStartupScenario(snapshot, consoleEvents, orientation)
   }
 }
 
+function assertErrorOverlayCopyScenario(snapshot, consoleEvents, interactions) {
+  assertNoAssetsScenario(interactions.readySnapshot, consoleEvents);
+
+  const copy = interactions.copyOverlay;
+  if (!copy) {
+    throw new Error('copy overlay diagnostics missing');
+  }
+
+  const errorSnapshot = copy.snapshot ?? snapshot;
+  if (errorSnapshot.placeholder?.state !== 'error') {
+    throw new Error(`expected error placeholder state, got ${errorSnapshot.placeholder?.state ?? '(missing)'}`);
+  }
+  if (errorSnapshot.placeholder?.title !== 'Browser startup failed') {
+    throw new Error(`unexpected error placeholder title: ${errorSnapshot.placeholder?.title ?? '(missing)'}`);
+  }
+  if (!errorSnapshot.placeholder?.detail.includes('Copy smoke error')) {
+    throw new Error(`unexpected error placeholder detail: ${errorSnapshot.placeholder?.detail ?? '(missing)'}`);
+  }
+  if (errorSnapshot.status?.className !== 'error') {
+    throw new Error(`expected status bar error class, got ${errorSnapshot.status?.className ?? '(missing)'}`);
+  }
+  if (!errorSnapshot.status?.text.includes('Copy smoke error')) {
+    throw new Error(`unexpected status bar text: ${errorSnapshot.status?.text ?? '(missing)'}`);
+  }
+  if (!errorSnapshot.errorCopy?.button?.visible) {
+    throw new Error('copy button did not become visible in error state');
+  }
+  if (errorSnapshot.errorCopy?.button?.text !== 'Copy') {
+    throw new Error(`copy button did not reset label: ${errorSnapshot.errorCopy?.button?.text ?? '(missing)'}`);
+  }
+  if (!errorSnapshot.errorCopy?.fallback?.visible) {
+    throw new Error('fallback textarea stayed hidden after clipboard API removal');
+  }
+  if (errorSnapshot.errorCopy?.fallback?.selectionStart !== 0) {
+    throw new Error(`fallback selection start should be 0, got ${errorSnapshot.errorCopy?.fallback?.selectionStart}`);
+  }
+  if (errorSnapshot.errorCopy?.fallback?.selectionEnd !== copy.fallbackText.length) {
+    throw new Error(
+      `fallback selection end should cover full payload, got ${errorSnapshot.errorCopy?.fallback?.selectionEnd}`
+    );
+  }
+
+  if (errorSnapshot.errorReport?.message !== 'Copy smoke error') {
+    throw new Error(`unexpected captured error message: ${errorSnapshot.errorReport?.message ?? '(missing)'}`);
+  }
+  if (errorSnapshot.errorReport?.build?.gitSha !== 'unknown') {
+    throw new Error(`unexpected captured build SHA: ${errorSnapshot.errorReport?.build?.gitSha ?? '(missing)'}`);
+  }
+  if (errorSnapshot.buildInfo?.source !== 'checked-in-default') {
+    throw new Error(`unexpected local build metadata source: ${errorSnapshot.buildInfo?.source ?? '(missing)'}`);
+  }
+
+  if (copy.copiedLabel !== 'Copied!') {
+    throw new Error(`copy button did not show success label: ${copy.copiedLabel}`);
+  }
+  if (copy.resetLabel !== 'Copy') {
+    throw new Error(`copy button did not reset after feedback: ${copy.resetLabel}`);
+  }
+
+  assertClipboardPayload(copy.clipboardText, 'clipboard payload');
+  assertClipboardPayload(copy.fallbackText, 'fallback payload');
+}
+
 async function dragResizeHandle(page, { deltaX = 0, deltaY = 0 }) {
   const handle = page.locator('#resize-handle');
   const box = await handle.boundingBox();
@@ -664,6 +753,84 @@ async function exerciseResizeHandle(page, orientation) {
   return { before, after };
 }
 
+async function exerciseErrorOverlayCopy(page) {
+  await page.evaluate(() => {
+    const error = new Error('Copy smoke error');
+    window.dispatchEvent(new ErrorEvent('error', {
+      message: error.message,
+      error,
+      filename: 'http://example.test/copy.js',
+      lineno: 9,
+      colno: 5,
+    }));
+  });
+
+  const copyButton = page.locator('#copy-error-report');
+  await copyButton.waitFor({ state: 'visible' });
+  await copyButton.click();
+
+  const clipboardText = await page.evaluate(() => navigator.clipboard.readText());
+  const copiedLabel = (await copyButton.textContent())?.trim() ?? '';
+  await page.waitForTimeout(1200);
+  const resetLabel = (await copyButton.textContent())?.trim() ?? '';
+
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: undefined,
+    });
+  });
+  await copyButton.click();
+
+  const fallback = page.locator('#error-copy-fallback');
+  await fallback.waitFor({ state: 'visible' });
+  const fallbackText = await fallback.inputValue();
+  const fallbackSelection = await page.evaluate(() => {
+    const element = document.getElementById('error-copy-fallback');
+    return {
+      start: element?.selectionStart ?? null,
+      end: element?.selectionEnd ?? null,
+    };
+  });
+  const snapshot = await gatherSnapshotWithRetry(page);
+
+  return {
+    clipboardText,
+    copiedLabel,
+    resetLabel,
+    fallbackText,
+    fallbackSelection,
+    snapshot,
+  };
+}
+
+function assertClipboardPayload(text, label = 'clipboard payload') {
+  if (!text.startsWith('```text\n')) {
+    throw new Error(`${label} should start with a fenced code block`);
+  }
+  if (!text.includes('Message: Copy smoke error')) {
+    throw new Error(`${label} missing error message`);
+  }
+  if (!text.includes('Stack trace:\nError: Copy smoke error')) {
+    throw new Error(`${label} missing stack trace`);
+  }
+  if (!text.includes('User agent:')) {
+    throw new Error(`${label} missing user agent`);
+  }
+  if (!text.includes('Page URL: http://127.0.0.1:')) {
+    throw new Error(`${label} missing page URL`);
+  }
+  if (!text.includes('Build git SHA: unknown')) {
+    throw new Error(`${label} missing build SHA`);
+  }
+  if (!text.includes('Build source: checked-in-default')) {
+    throw new Error(`${label} missing build source`);
+  }
+  if (!text.includes('Location: http://example.test/copy.js, line 9, column 5')) {
+    throw new Error(`${label} missing source location`);
+  }
+}
+
 async function runScenario(browser, scenario, outDir, port) {
   const scenarioRoot = scenario.url ? null : await createScenarioRoot(scenario.rootScenario ?? scenario.name);
   const serverInfo = scenario.url ? null : startStaticServer(scenarioRoot, port);
@@ -681,18 +848,24 @@ async function runScenario(browser, scenario, outDir, port) {
     });
 
     context = await browser.newContext(scenario.contextOptions ?? { viewport: { width: 1280, height: 720 } });
+    if (Array.isArray(scenario.permissions) && scenario.permissions.length > 0) {
+      await context.grantPermissions(scenario.permissions, { origin: new URL(url).origin });
+    }
     page = await context.newPage();
     attachEventCapture(page, consoleEvents);
 
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 120000 });
     await page.waitForLoadState('load').catch(() => {});
 
-    const snapshot = await waitForScenario(
-      page,
-      consoleEvents,
+    const readyWhen = scenario.readyWhen ?? (
       scenario.name === 'browser-load-no-assets'
         ? current => current.jscoqLoaded && current.status?.hidden === true
         : current => current.placeholder?.hidden === true
+    );
+    const snapshot = await waitForScenario(
+      page,
+      consoleEvents,
+      readyWhen
     );
 
     const extraInteractions = scenario.afterReady
@@ -809,6 +982,21 @@ async function main() {
           },
           assert(snapshot, consoleEvents, interactions) {
             assertMobileRenderStartupScenario(interactions.readySnapshot, consoleEvents, 'landscape');
+          },
+        },
+        {
+          name: 'browser-error-overlay-copy',
+          permissions: ['clipboard-read', 'clipboard-write'],
+          readyWhen(current) {
+            return current.jscoqLoaded && current.status?.hidden === true && current.placeholder?.state === 'idle';
+          },
+          async afterReady(page) {
+            return {
+              copyOverlay: await exerciseErrorOverlayCopy(page),
+            };
+          },
+          assert(snapshot, consoleEvents, interactions) {
+            assertErrorOverlayCopyScenario(snapshot, consoleEvents, interactions);
           },
         }
       );

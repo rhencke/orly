@@ -108,14 +108,32 @@
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      color: #333;
+      padding: 1.5rem;
+      color: #d4d8e2;
       font-size: 0.85rem;
       pointer-events: none;
       gap: 0.4rem;
+      text-align: center;
+      background:
+        radial-gradient(circle at center, rgb(13 17 30 / 74%), rgb(0 0 0 / 92%));
     }
     #game-placeholder .label {
       font-size: 1.5rem;
-      color: #222;
+      color: #f3f7ff;
+    }
+    #game-placeholder .detail {
+      max-width: min(28rem, calc(100% - 2rem));
+      color: #b7c4db;
+      line-height: 1.45;
+    }
+    #game-placeholder[data-state="error"] .label {
+      color: #ffb4b4;
+    }
+    #game-placeholder[data-state="error"] .detail {
+      color: #ffcfcf;
+    }
+    #game-placeholder[data-state="idle"] .label {
+      color: #d7e7ff;
     }
 
     #game-overlay {
@@ -406,10 +424,12 @@
             </div>
           </div>
         </div>
-        <div id="game-placeholder">
-          <span class="label">[ game canvas ]</span>
-          <span>Quake rendering target — coming in <a href="https://github.com/rhencke/orly/issues/15" style="color:#444">#15</a></span>
-      </div>
+        <div id="game-placeholder" data-state="loading" aria-live="polite">
+          <span class="label" data-placeholder-role="title">Loading browser shell…</span>
+          <span class="detail" data-placeholder-role="detail">
+            Booting JsCoq and checking whether q3dm1 assets are available.
+          </span>
+        </div>
     </div>
 
     <!-- drag handle to resize the two panels -->
@@ -441,6 +461,24 @@
 
     // ── status bar helpers ───────────────────────────────────────
     const statusBar = document.getElementById('status-bar');
+    const gamePlaceholder = document.getElementById('game-placeholder');
+    const placeholderTitle =
+      gamePlaceholder.querySelector('[data-placeholder-role="title"]');
+    const placeholderDetail =
+      gamePlaceholder.querySelector('[data-placeholder-role="detail"]');
+
+    function showPlaceholder(title, detail = '', state = 'loading') {
+      gamePlaceholder.hidden = false;
+      gamePlaceholder.dataset.state = state;
+      placeholderTitle.textContent = title;
+      placeholderDetail.textContent = detail;
+      placeholderDetail.hidden = detail.length === 0;
+    }
+
+    function hidePlaceholder() {
+      gamePlaceholder.hidden = true;
+      gamePlaceholder.dataset.state = 'ready';
+    }
 
     function showStatus(msg, type = 'loading') {
       statusBar.hidden = false;
@@ -459,10 +497,12 @@
     // JsCoq internal errors that bubble up as uncaught exceptions.
     window.addEventListener('error', (e) => {
       showStatus(`Error: ${e.message}`, 'error');
+      showPlaceholder('Browser startup failed', e.message, 'error');
     });
     window.addEventListener('unhandledrejection', (e) => {
       const msg = e.reason?.message || e.reason || 'Unknown error';
       showStatus(`Error: ${msg}`, 'error');
+      showPlaceholder('Browser startup failed', msg, 'error');
     });
 
     // ── asset loader ─────────────────────────────────────────────
@@ -550,6 +590,10 @@
 
     let jscoqOk = false;
     let rocqBridge = null;
+    showPlaceholder(
+      'Loading JsCoq and game theories…',
+      'Fetching the Rocq runtime and the browser-side q3dm1 theory bundle.'
+    );
     showStatus('Loading JsCoq and game theories…');
     try {
       // Fetch the JsCoq module and the game theory file in parallel —
@@ -567,6 +611,10 @@
       }
 
       showStatus('Starting Rocq kernel…');
+      showPlaceholder(
+        'Starting Rocq kernel…',
+        'Compiling the game-core theories inside the browser.'
+      );
       const coq = await JsCoq.start(
         JSCOQ_ROOT.href,
         ['.coq-code'],
@@ -582,6 +630,7 @@
       jscoqOk = true;
     } catch (err) {
       showStatus(`Failed to load JsCoq: ${err.message}`, 'error');
+      showPlaceholder('JsCoq startup failed', err.message, 'error');
       console.error('JsCoq bootstrap failed:', err);
     }
 
@@ -595,10 +644,18 @@
       window.orlyAssets = await loadAssets();
       if (window.orlyAssets.size > 0)
         console.log(`orly: loaded ${window.orlyAssets.size} game assets`);
+      if (jscoqOk && window.orlyAssets.size === 0) {
+        showPlaceholder(
+          'q3dm1 assets not found',
+          'Run make assets DEMO=/path/to/pak0.pk3, then reload to render the demo level.',
+          'idle'
+        );
+      }
       if (jscoqOk) clearStatus();
     } catch (err) {
       console.error('Asset loading failed:', err);
       window.orlyAssets = new Map();
+      showPlaceholder('Asset loading failed', err.message, 'error');
       if (jscoqOk) showStatus(`Failed to load assets: ${err.message}`, 'error');
     }
 
@@ -635,6 +692,7 @@
     if (bspBuffer) {
       try {
         showStatus('Parsing BSP…');
+        showPlaceholder('Parsing q3dm1 BSP…', 'Decoding level geometry and lightmaps.');
         const bsp = parseBsp(bspBuffer);
         console.log(`orly: parsed BSP — ${bsp.faces.length} faces, ` +
                     `${bsp.vertices.length} vertices, ` +
@@ -645,6 +703,10 @@
         }
 
         showStatus('Syncing Rocq render state…');
+        showPlaceholder(
+          'Syncing Rocq render state…',
+          'Building the initial render snapshot from the verified game core.'
+        );
         const initialSnapshot = await rocqBridge.load_world({
           entities: bsp.entities,
           faces: bsp.faces,
@@ -655,10 +717,15 @@
         });
 
         showStatus('Loading shaders…');
+        showPlaceholder('Loading shaders…', 'Mapping q3dm1 materials to browser textures.');
         const shaderDefs = await loadShadersFromAssets(window.orlyAssets);
         console.log(`orly: loaded ${shaderDefs.size} shader definitions`);
 
         showStatus('Initializing renderer…');
+        showPlaceholder(
+          'Initializing renderer…',
+          'Preparing the first WebGL frame for q3dm1.'
+        );
         const renderer = createRenderer(canvas, bsp, {
           shaderDefs,
           assets: window.orlyAssets,
@@ -681,7 +748,7 @@
         renderSnapshot(initialSnapshot);
 
         // Hide the placeholder only after a real Rocq-seeded frame has drawn.
-        document.getElementById('game-placeholder').hidden = true;
+        hidePlaceholder();
 
         async function frame(now) {
           const dtMs = lastFrameTime === null
@@ -699,6 +766,7 @@
       } catch (err) {
         console.error('BSP render init failed:', err);
         showStatus(`Render error: ${err.message}`, 'error');
+        showPlaceholder('Render startup failed', err.message, 'error');
       }
     }
     // ── direction-aware drag-to-resize ───────────────────────────

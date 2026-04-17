@@ -59,6 +59,22 @@ player state, advances physics, evaluates triggers, and produces a
 **render snapshot** (camera transform, visible surface list, entity
 positions) that JavaScript consumes for drawing.
 
+For player controls, the frame-step contract is intentionally specific:
+
+- JavaScript normalizes desktop keyboard/mouse and mobile touch controls
+  into the same `input_snapshot` shape before crossing the bridge.
+- Rocq applies yaw deltas before deriving planar movement, so "forward"
+  and "strafe" always mean relative to the updated facing angle.
+- Rocq clamps pitch to the gameplay-safe range and wraps yaw into the
+  usual turn-around interval rather than leaving angle drift to JS.
+- World stepping owns jump, gravity, and collision response: jumping is
+  grounded-only, gravity applies when airborne, and blocked motion zeroes
+  the corresponding velocity component in the authoritative state.
+
+These rules are documented as executable lemmas and examples in
+`theories/GameState.v`, so the shipped controls have a proof-backed
+behavior story instead of only an informal browser implementation.
+
 ## What stays in JavaScript
 
 These responsibilities stay in the browser shell because they require

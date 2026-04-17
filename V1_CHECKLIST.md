@@ -24,6 +24,35 @@ Many Deaths").  Reasons:
   demo license; asset packaging is tracked separately in
   [issue #14](https://github.com/rhencke/orly/issues/14).
 
+## q3dm1 entity scope for issue #26
+
+The v1 gameplay path for q3dm1 intentionally depends on a very small slice of
+the Quake 3 entity system.  The following entity families are **in scope** for
+[issue #26](https://github.com/rhencke/orly/issues/26):
+
+- `worldspawn` only as the static BSP container already loaded for geometry,
+  rendering, and collision; no additional worldspawn-specific gameplay logic is
+  required here.
+- `info_player_deathmatch` for spawn selection and restart placement.
+- `trigger_push` for the single q3dm1 jump pad that must launch the player when
+  crossed.
+- `target_position` only where referenced by a `trigger_push`, so Rocq can
+  derive the jump-pad launch direction from BSP entity data instead of
+  hard-coding it in JavaScript.
+
+The following entity families are **deferred** for v1 unless a later q3dm1
+investigation proves one is unexpectedly required for the acceptance path:
+
+- Movers and doors such as `func_door`, `func_button`, `func_plat`, and other
+  brush-model interactions.
+- Teleporters and destination entities such as `trigger_teleport` and
+  `misc_teleporter_dest`.
+- Pickups and inventory-affecting items such as health, armor, weapons, ammo,
+  and powerups.
+- Damage, scoring, scripting, or combat-related entities such as
+  `trigger_hurt`, `target_speaker`, `target_delay`, `target_print`, bots, and
+  weapon logic.
+
 ## Acceptance checklist
 
 ### Load and deployment

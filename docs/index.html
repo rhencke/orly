@@ -263,6 +263,7 @@
 
   <script type="module">
     import { parseBsp } from './bsp.js';
+    import { createDesktopInput } from './input.js';
     import { createRenderer, mat4Perspective } from './renderer.js';
     import { createRocqBridge } from './rocq_bridge.js';
     import { loadShadersFromAssets } from './shaders.js';
@@ -478,9 +479,15 @@
         document.getElementById('game-placeholder').hidden = true;
 
         const projMatrix = new Float32Array(16);
+        const desktopInput = createDesktopInput(canvas);
+        let lastFrameTime = null;
 
-        async function frame() {
-          const snapshot = await rocqBridge.step(null);
+        async function frame(now) {
+          const dtMs = lastFrameTime === null
+            ? 0
+            : Math.min(100, Math.max(0, now - lastFrameTime));
+          lastFrameTime = now;
+          const snapshot = await rocqBridge.step(desktopInput.sample(dtMs));
           // Update projection each frame to track canvas resize
           const aspect = canvas.width / canvas.height || 1;
           mat4Perspective(projMatrix, Math.PI / 2, aspect, 1.0, 4096.0);

@@ -176,8 +176,8 @@ function snapshotFromGameStateWords(gsWords, visibleFaces) {
 
 /**
  * Format a JS input snapshot (or null) as a Rocq input_snapshot expression.
- * Until keyboard/mouse wiring lands in a later task, null maps to the zero
- * snapshot so that step calls are valid Rocq before input is plumbed.
+ * Null still maps to the zero snapshot so callers can opt out of driving
+ * movement for a frame without special-case bridge logic.
  */
 function formatInputSnapshot(input) {
   if (!input) return 'input_snapshot_zero';

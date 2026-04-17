@@ -414,7 +414,29 @@ function detectFailure(snapshot, consoleEvents) {
   return null;
 }
 
-async function waitForScenario(page, consoleEvents, predicate) {
+function detectStalledRocqSync(snapshot) {
+  const statusText = snapshot?.status?.text ?? '';
+  const placeholder = snapshot?.placeholder ?? null;
+  if (statusText !== 'Syncing Rocq render state…') {
+    return null;
+  }
+  if (snapshot?.status?.hidden !== false) {
+    return null;
+  }
+  if (placeholder?.hidden !== false || placeholder.state !== 'loading') {
+    return null;
+  }
+  if (placeholder.title !== 'Syncing Rocq render state…') {
+    return null;
+  }
+  return (
+    'rocq-sync-stalled: ' +
+    `status="${statusText}", ` +
+    `detail="${placeholder.detail || '(empty)'}"`
+  );
+}
+
+async function waitForScenario(page, consoleEvents, predicate, timeoutFailure = null) {
   const deadline = Date.now() + TIMEOUT_MS;
   let snapshot = await gatherSnapshotWithRetry(page);
 
@@ -426,6 +448,10 @@ async function waitForScenario(page, consoleEvents, predicate) {
     snapshot = await gatherSnapshotWithRetry(page);
   }
 
+  const timeoutMessage = timeoutFailure?.(snapshot, consoleEvents);
+  if (timeoutMessage) {
+    throw new Error(timeoutMessage);
+  }
   return snapshot;
 }
 
@@ -865,7 +891,8 @@ async function runScenario(browser, scenario, outDir, port) {
     const snapshot = await waitForScenario(
       page,
       consoleEvents,
-      readyWhen
+      readyWhen,
+      scenario.timeoutFailure ?? null
     );
 
     const extraInteractions = scenario.afterReady
@@ -1013,6 +1040,9 @@ async function main() {
           return {
             deployedAssetChecks: await inspectDeployedAssetCaching(DEPLOYED_URL),
           };
+        },
+        timeoutFailure(snapshot) {
+          return detectStalledRocqSync(snapshot);
         },
         assert(snapshot, consoleEvents, interactions) {
           assertDeployedPagesScenario(snapshot, consoleEvents, interactions);

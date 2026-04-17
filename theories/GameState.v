@@ -92,7 +92,8 @@ Definition input_snapshot_zero : input_snapshot :=
     For v1, the primary entity type is [trigger_push] (jump pads). *)
 Record entity_state : Type := mk_entity_state
   { es_entity_index : Z       (** index into [bf_entities] *)
-  ; es_origin       : vec3    (** world-space position *)
+  ; es_model_index  : Z       (** inline BSP submodel index *)
+  ; es_origin       : vec3    (** resolved world-space target/origin *)
   ; es_active       : bool    (** whether the trigger is armed *)
   }.
 
@@ -455,6 +456,10 @@ Record target_position_metadata : Type := mk_target_position_metadata
   ; tpos_origin      : vec3
   }.
 
+Definition target_position_name_eqb
+    (target : target_position_metadata) (name : list Z) : bool :=
+  list_Z_eqb (tpos_target_name target) name.
+
 (** True iff entity [e] has classname [trigger_push]. *)
 Definition is_trigger_push_entity (e : bsp_entity) : bool :=
   entity_classname_eqb e val_trigger_push.
@@ -509,6 +514,61 @@ Definition parse_target_position_metadata (e : bsp_entity)
     end
   else None.
 
+Fixpoint collect_target_positions
+    (entities : list bsp_entity) : list target_position_metadata :=
+  match entities with
+  | [] => []
+  | e :: rest =>
+      match parse_target_position_metadata e with
+      | Some target => target :: collect_target_positions rest
+      | None        => collect_target_positions rest
+      end
+  end.
+
+Fixpoint find_target_position_origin
+    (targets : list target_position_metadata) (name : list Z) : option vec3 :=
+  match targets with
+  | [] => None
+  | target :: rest =>
+      if target_position_name_eqb target name
+      then Some (tpos_origin target)
+      else find_target_position_origin rest name
+  end.
+
+Fixpoint initial_trigger_states_from_entities_aux
+    (entities : list bsp_entity)
+    (targets : list target_position_metadata)
+    (entity_index : Z) : list entity_state :=
+  match entities with
+  | [] => []
+  | e :: rest =>
+      let rest_states :=
+        initial_trigger_states_from_entities_aux rest targets (entity_index + 1) in
+      match parse_trigger_push_metadata e with
+      | Some trigger =>
+          match find_target_position_origin targets (tpm_target_name trigger) with
+          | Some origin =>
+              mk_entity_state
+                entity_index
+                (tpm_model_index trigger)
+                origin
+                true :: rest_states
+          | None => rest_states
+          end
+      | None => rest_states
+      end
+  end.
+
+(** Resolve the initial trigger/jump-pad state directly from the BSP
+    entity list by pairing [trigger_push] entities with the
+    [target_position] entities they reference. *)
+Definition initial_trigger_states_from_entities
+    (entities : list bsp_entity) : list entity_state :=
+  initial_trigger_states_from_entities_aux
+    entities
+    (collect_target_positions entities)
+    0.
+
 (** [select_spawn_point entities] returns the position and yaw of the
     first [info_player_deathmatch] entity that has a parseable [origin].
     Returns [None] if no such entity exists. *)
@@ -530,9 +590,10 @@ Fixpoint select_spawn_point (entities : list bsp_entity)
     [entities]; if none exists, falls back to [game_state_init]. *)
 Definition game_state_from_entities (entities : list bsp_entity)
     : game_state :=
+  let trigger_states := initial_trigger_states_from_entities entities in
   match select_spawn_point entities with
-  | Some (pos, yaw) => mk_game_state pos vec3_zero yaw 0 true [] 0
-  | None            => game_state_init
+  | Some (pos, yaw) => mk_game_state pos vec3_zero yaw 0 true trigger_states 0
+  | None            => mk_game_state vec3_zero vec3_zero 0 0 true trigger_states 0
   end.
 
 (** End-to-end helper for the browser bridge: derive the initial camera
@@ -745,6 +806,27 @@ Lemma parse_target_position_metadata_example :
           (mk_vec3 128 0 256)).
 Proof. vm_compute. reflexivity. Qed.
 
+Lemma find_target_position_origin_example :
+  find_target_position_origin
+    [ mk_target_position_metadata [112; 97; 100; 49] (mk_vec3 128 0 256) ]
+    [112; 97; 100; 49] =
+  Some (mk_vec3 128 0 256).
+Proof. vm_compute. reflexivity. Qed.
+
+Lemma initial_trigger_states_from_entities_example :
+  initial_trigger_states_from_entities
+    [ ( (key_classname, val_trigger_push)
+        :: (key_model, [42; 51])
+        :: (key_target, [112; 97; 100; 49])
+        :: nil )
+    ; ( (key_classname, val_target_position)
+        :: (key_targetname, [112; 97; 100; 49])
+        :: (key_origin, [49; 50; 56; 32; 48; 32; 50; 53; 54])
+        :: nil )
+    ] =
+  [mk_entity_state 0 3 (mk_vec3 128 0 256) true].
+Proof. vm_compute. reflexivity. Qed.
+
 (** An empty entity list has no spawn points. *)
 Lemma select_spawn_point_nil :
   select_spawn_point [] = None.
@@ -776,6 +858,15 @@ Qed.
 (** A spawn-derived state starts grounded. *)
 Lemma game_state_from_entities_grounded : forall entities,
   gs_on_ground (game_state_from_entities entities) = true.
+Proof.
+  intros entities. unfold game_state_from_entities.
+  destruct (select_spawn_point entities) as [[[px py pz] yaw] |];
+    reflexivity.
+Qed.
+
+Lemma game_state_from_entities_entities : forall entities,
+  gs_entities (game_state_from_entities entities) =
+  initial_trigger_states_from_entities entities.
 Proof.
   intros entities. unfold game_state_from_entities.
   destruct (select_spawn_point entities) as [[[px py pz] yaw] |];

@@ -119,6 +119,38 @@ Record render_face_input : Type := mk_render_face_input
   ; rfi_size_y      : Z
   }.
 
+(** Minimal plane data needed for BSP brush collision. *)
+Record collision_plane_input : Type := mk_collision_plane_input
+  { cpi_normal_x : Q
+  ; cpi_normal_y : Q
+  ; cpi_normal_z : Q
+  ; cpi_dist     : Q
+  }.
+
+(** Minimal texture metadata needed to decide whether a brush blocks
+    the player. *)
+Record collision_texture_input : Type := mk_collision_texture_input
+  { cti_contents : Z }.
+
+(** Minimal brush data needed for BSP collision. *)
+Record collision_brush_input : Type := mk_collision_brush_input
+  { cbi_first_side    : Z
+  ; cbi_num_sides     : Z
+  ; cbi_texture_index : Z
+  }.
+
+(** Minimal brush-side data needed for BSP collision. *)
+Record collision_brush_side_input : Type := mk_collision_brush_side_input
+  { cbsi_plane_index : Z }.
+
+(** Static BSP collision data provided by the browser at world load. *)
+Record collision_world_input : Type := mk_collision_world_input
+  { cwi_planes      : list collision_plane_input
+  ; cwi_textures    : list collision_texture_input
+  ; cwi_brushes     : list collision_brush_input
+  ; cwi_brush_sides : list collision_brush_side_input
+  }.
+
 Definition face_type_polygon : Z := 1.
 Definition face_type_patch   : Z := 2.
 Definition face_type_mesh    : Z := 3.
@@ -184,6 +216,11 @@ Definition visible_face_indices
     (faces : list render_face_input)
     (textures : list render_texture_input) : list Z :=
   visible_face_indices_aux faces textures 0.
+
+Definition collision_world_empty : collision_world_input :=
+  mk_collision_world_input [] [] [] [].
+
+Definition contents_solid : Z := 1.
 
 (* ------------------------------------------------------------------ *)
 (** ** Game state (Rocq-owned, authoritative)                          *)
@@ -459,6 +496,140 @@ Definition initial_visible_faces_from_inputs
     (initial_render_snapshot_from_inputs entities faces textures).
 
 (* ------------------------------------------------------------------ *)
+(** ** BSP collision helpers                                            *)
+(* ------------------------------------------------------------------ *)
+
+Definition qleb (a b : Q) : bool :=
+  if Qlt_le_dec b a then false else true.
+
+Definition vec3_dot (a b : vec3) : Q :=
+  (v3_x a * v3_x b + v3_y a * v3_y b + v3_z a * v3_z b)%Q.
+
+Definition vec3_midpoint (a b : vec3) : vec3 :=
+  mk_vec3
+    ((v3_x a + v3_x b) / 2)%Q
+    ((v3_y a + v3_y b) / 2)%Q
+    ((v3_z a + v3_z b) / 2)%Q.
+
+Definition plane_normal (pl : collision_plane_input) : vec3 :=
+  mk_vec3 (cpi_normal_x pl) (cpi_normal_y pl) (cpi_normal_z pl).
+
+Definition brush_blocks_playerb
+    (textures : list collision_texture_input) (br : collision_brush_input) : bool :=
+  match nth_z textures (cbi_texture_index br) with
+  | Some tx =>
+      bit_setb (cti_contents tx) contents_solid ||
+      bit_setb (cti_contents tx) contents_playerclip
+  | None => false
+  end.
+
+Definition plane_signed_distance
+    (pl : collision_plane_input) (pos : vec3) : Q :=
+  (vec3_dot (plane_normal pl) pos - cpi_dist pl)%Q.
+
+Definition player_radius : Q := 16.
+Definition ground_probe_distance : Q := 1.
+Definition gravity_accel : Q := 800.
+Definition jump_speed : Q := 270.
+Definition collision_sweep_iterations : nat := 8%nat.
+Definition collision_motion_substeps : nat := 16%nat.
+Definition collision_motion_substep_scale : Q := (1 # 16)%Q.
+
+Fixpoint point_collides_brush_aux
+    (planes : list collision_plane_input)
+    (brush_sides : list collision_brush_side_input)
+    (pos : vec3)
+    (side_index : Z)
+    (fuel : nat) : bool :=
+  match fuel with
+  | O => true
+  | S fuel' =>
+      match nth_z brush_sides side_index with
+      | None => false
+      | Some side =>
+          match nth_z planes (cbsi_plane_index side) with
+          | None => false
+          | Some plane =>
+              if qleb (plane_signed_distance plane pos) player_radius
+              then point_collides_brush_aux planes brush_sides pos (side_index + 1) fuel'
+              else false
+          end
+      end
+  end.
+
+Definition point_collides_brushb
+    (world : collision_world_input) (pos : vec3) (br : collision_brush_input) : bool :=
+  if brush_blocks_playerb (cwi_textures world) br then
+    match Z.max 0 (cbi_num_sides br) with
+    | 0 => false
+    | n =>
+        point_collides_brush_aux
+          (cwi_planes world)
+          (cwi_brush_sides world)
+          pos
+          (cbi_first_side br)
+          (Z.to_nat n)
+    end
+  else false.
+
+Fixpoint point_collides_world_aux
+    (world : collision_world_input) (pos : vec3)
+    (brushes : list collision_brush_input) : bool :=
+  match brushes with
+  | [] => false
+  | br :: rest =>
+      if point_collides_brushb world pos br then true
+      else point_collides_world_aux world pos rest
+  end.
+
+Definition point_collides_worldb
+    (world : collision_world_input) (pos : vec3) : bool :=
+  point_collides_world_aux world pos (cwi_brushes world).
+
+Fixpoint sweep_to_contact
+    (world : collision_world_input) (lo hi : vec3) (fuel : nat) : vec3 :=
+  match fuel with
+  | O => lo
+  | S fuel' =>
+      let mid := vec3_midpoint lo hi in
+      if point_collides_worldb world mid
+      then sweep_to_contact world lo mid fuel'
+      else sweep_to_contact world mid hi fuel'
+  end.
+
+Definition resolve_motion
+    (world : collision_world_input) (start delta : vec3) : vec3 * bool :=
+  let target := vec3_add start delta in
+  if point_collides_worldb world start then (start, true) else
+  if point_collides_worldb world target
+  then (sweep_to_contact world start target collision_sweep_iterations, true)
+  else (target, false).
+
+Fixpoint resolve_motion_substeps_aux
+    (world : collision_world_input) (pos step_delta : vec3) (fuel : nat)
+    : vec3 * bool :=
+  match fuel with
+  | O => (pos, false)
+  | S fuel' =>
+      let '(next_pos, blocked_now) := resolve_motion world pos step_delta in
+      if blocked_now then (next_pos, true)
+      else resolve_motion_substeps_aux world next_pos step_delta fuel'
+  end.
+
+Definition resolve_motion_substeps
+    (world : collision_world_input) (start delta : vec3) : vec3 * bool :=
+  resolve_motion_substeps_aux
+    world
+    start
+    (vec3_scale collision_motion_substep_scale delta)
+    collision_motion_substeps.
+
+Definition grounded_by_worldb
+    (world : collision_world_input) (pos : vec3) : bool :=
+  point_collides_worldb world
+    (mk_vec3 (v3_x pos) (v3_y pos) (v3_z pos - ground_probe_distance)).
+
+(* ------------------------------------------------------------------ *)
 (** ** Correctness lemmas for spawn-point selection                     *)
 (* ------------------------------------------------------------------ *)
 
@@ -727,6 +898,43 @@ Definition step_world (gs : game_state) (input : input_snapshot)
     (gs_entities gs)
     (gs_tick gs + 1).
 
+Definition step_world_in_world
+    (world : collision_world_input) (gs : game_state) (input : input_snapshot)
+    : game_state :=
+  let yaw := step_yaw (gs_yaw gs) (is_yaw_delta input) in
+  let pitch := step_pitch (gs_pitch gs) (is_pitch_delta input) in
+  let dt_s := millis_to_seconds (is_dt_ms input) in
+  let grounded_start :=
+    gs_on_ground gs || grounded_by_worldb world (gs_position gs) in
+  let prior_vel_z := if grounded_start then 0%Q else v3_z (gs_velocity gs) in
+  let desired_vel_z :=
+    if grounded_start && is_jump input
+    then jump_speed
+    else (prior_vel_z - gravity_accel * dt_s)%Q in
+  let desired_planar := movement_velocity yaw 0%Q input in
+  let horizontal_delta :=
+    vec3_scale dt_s (mk_vec3 (v3_x desired_planar) (v3_y desired_planar) 0) in
+  let '(horizontal_pos, horizontal_blocked) :=
+    resolve_motion_substeps world (gs_position gs) horizontal_delta in
+  let vertical_delta := mk_vec3 0 0 (dt_s * desired_vel_z)%Q in
+  let '(position, vertical_blocked) :=
+    resolve_motion_substeps world horizontal_pos vertical_delta in
+  let landed := vertical_blocked && qleb desired_vel_z 0 in
+  let on_ground := landed || grounded_by_worldb world position in
+  let velocity :=
+    mk_vec3
+      (if horizontal_blocked then 0 else v3_x desired_planar)
+      (if horizontal_blocked then 0 else v3_y desired_planar)
+      (if vertical_blocked then 0 else desired_vel_z) in
+  mk_game_state
+    position
+    velocity
+    yaw
+    pitch
+    on_ground
+    (gs_entities gs)
+    (gs_tick gs + 1).
+
 (** Bridge-facing word-level entry point for per-frame stepping.
     Takes the current game state as a word list (from
     [game_state_to_words]) plus the packed input snapshot, and
@@ -737,6 +945,14 @@ Definition step_world_words (ws : list Z) (input : input_snapshot)
   match game_state_from_words ws with
   | None    => ws
   | Some gs => game_state_to_words (step_world gs input)
+  end.
+
+Definition step_world_words_in_world
+    (world : collision_world_input)
+    (ws : list Z) (input : input_snapshot) : list Z :=
+  match game_state_from_words ws with
+  | None    => ws
+  | Some gs => game_state_to_words (step_world_in_world world gs input)
   end.
 
 (** Bridge-facing entry point for [load_world].  Returns the initial
@@ -861,3 +1077,71 @@ Proof.
   intros entities. unfold initial_game_state_words_from_entities.
   apply game_state_to_words_length.
 Qed.
+
+Lemma point_collides_worldb_empty : forall pos,
+  point_collides_worldb collision_world_empty pos = false.
+Proof. reflexivity. Qed.
+
+Definition sample_solid_texture : collision_texture_input :=
+  mk_collision_texture_input contents_solid.
+
+Definition sample_floor_world : collision_world_input :=
+  mk_collision_world_input
+    [ mk_collision_plane_input   1    0    0 1024
+    ; mk_collision_plane_input (-1)   0    0 1024
+    ; mk_collision_plane_input   0    1    0 1024
+    ; mk_collision_plane_input   0  (-1)   0 1024
+    ; mk_collision_plane_input   0    0    1    0
+    ; mk_collision_plane_input   0    0  (-1)  64
+    ]
+    [sample_solid_texture]
+    [mk_collision_brush_input 0 6 0]
+    [ mk_collision_brush_side_input 0
+    ; mk_collision_brush_side_input 1
+    ; mk_collision_brush_side_input 2
+    ; mk_collision_brush_side_input 3
+    ; mk_collision_brush_side_input 4
+    ; mk_collision_brush_side_input 5
+    ].
+
+Definition sample_wall_world : collision_world_input :=
+  mk_collision_world_input
+    [ mk_collision_plane_input   1    0    0   96
+    ; mk_collision_plane_input (-1)   0    0  (-32)
+    ; mk_collision_plane_input   0    1    0 1024
+    ; mk_collision_plane_input   0  (-1)   0 1024
+    ; mk_collision_plane_input   0    0    1 1024
+    ; mk_collision_plane_input   0    0  (-1) 1024
+    ]
+    [sample_solid_texture]
+    [mk_collision_brush_input 0 6 0]
+    [ mk_collision_brush_side_input 0
+    ; mk_collision_brush_side_input 1
+    ; mk_collision_brush_side_input 2
+    ; mk_collision_brush_side_input 3
+    ; mk_collision_brush_side_input 4
+    ; mk_collision_brush_side_input 5
+    ].
+
+Lemma step_world_in_world_empty_applies_gravity :
+  let stepped :=
+    step_world_in_world collision_world_empty game_state_init
+      (mk_input_snapshot false false false false false 0%Q 0%Q 1000) in
+  v3_z (gs_position stepped) == -800 /\ gs_on_ground stepped = false.
+Proof. vm_compute. split; reflexivity. Qed.
+
+Lemma brush_blocks_playerb_sample_solid :
+  brush_blocks_playerb [sample_solid_texture] (mk_collision_brush_input 0 6 0) = true.
+Proof. vm_compute. reflexivity. Qed.
+
+Lemma point_collides_worldb_sample_floor_contact :
+  point_collides_worldb sample_floor_world (mk_vec3 0 0 16) = true.
+Proof. vm_compute. reflexivity. Qed.
+
+Lemma grounded_by_worldb_sample_floor :
+  grounded_by_worldb sample_floor_world (mk_vec3 0 0 17) = true.
+Proof. vm_compute. reflexivity. Qed.
+
+Lemma point_collides_worldb_sample_wall :
+  point_collides_worldb sample_wall_world (mk_vec3 16 0 128) = true.
+Proof. vm_compute. reflexivity. Qed.

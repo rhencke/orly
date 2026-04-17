@@ -2,9 +2,12 @@ import { mat4LookAt } from './renderer.js';
 
 const DEG_TO_RAD = Math.PI / 180;
 const BRIDGE_VERSION = 1;
-const BRIDGE_HELPERS_DEFINITION = 'Definition step_world_words';
+const BRIDGE_HELPERS_DEFINITION = 'Definition step_world_words_in_world';
 const CAMERA_WORDS_COUNT = 10;
 const GAME_STATE_WORDS_COUNT = 18;
+const GEOMETRY_Q_SCALE = 1000000;
+const CONTENTS_SOLID = 1;
+const CONTENTS_PLAYERCLIP = 65536;
 
 function nextTick() {
   return new Promise(resolve => setTimeout(resolve, 0));
@@ -20,6 +23,11 @@ function encodeAsciiBytes(str) {
 
 function formatZList(values) {
   return `[${values.join('; ')}]`;
+}
+
+function formatQ(value, scale = GEOMETRY_Q_SCALE) {
+  const numerator = Math.round(value * scale);
+  return `(${numerator} # ${scale})`;
 }
 
 function formatEntity(entity) {
@@ -43,6 +51,14 @@ function formatTextures(textures) {
   return `[${textures.map(formatTexture).join('; ')}]`;
 }
 
+function formatCollisionTexture(texture) {
+  return `(mk_collision_texture_input ${texture.contents})`;
+}
+
+function formatCollisionTextures(textures) {
+  return `[${textures.map(formatCollisionTexture).join('; ')}]`;
+}
+
 function formatFace(face) {
   return `(mk_render_face_input ${face.texture} ${face.type} ${face.nVertexes} ` +
     `${face.nMeshverts} ${face.sizeX} ${face.sizeY})`;
@@ -50,6 +66,44 @@ function formatFace(face) {
 
 function formatFaces(faces) {
   return `[${faces.map(formatFace).join('; ')}]`;
+}
+
+function formatPlane(plane) {
+  return `(mk_collision_plane_input ${formatQ(plane.normalX)} ${formatQ(plane.normalY)} ` +
+    `${formatQ(plane.normalZ)} ${formatQ(plane.dist)})`;
+}
+
+function formatPlanes(planes) {
+  return `[${planes.map(formatPlane).join('; ')}]`;
+}
+
+function formatBrush(brush) {
+  return `(mk_collision_brush_input ${brush.firstSide} ${brush.numSides} ${brush.textureIndex})`;
+}
+
+function formatBrushes(brushes) {
+  return `[${brushes.map(formatBrush).join('; ')}]`;
+}
+
+function formatBrushSide(side) {
+  return `(mk_collision_brush_side_input ${side.planeIndex})`;
+}
+
+function formatBrushSides(brushSides) {
+  return `[${brushSides.map(formatBrushSide).join('; ')}]`;
+}
+
+function formatCollisionWorld(world) {
+  const blockingBrushes = world.brushes.filter(brush => {
+    const texture = world.textures[brush.textureIndex];
+    if (!texture) return false;
+    return (texture.contents & (CONTENTS_SOLID | CONTENTS_PLAYERCLIP)) !== 0;
+  });
+  return `(mk_collision_world_input ` +
+    `${formatPlanes(world.planes)} ` +
+    `${formatCollisionTextures(world.textures)} ` +
+    `${formatBrushes(blockingBrushes)} ` +
+    `${formatBrushSides(world.brushSides)})`;
 }
 
 function flattenMessages(manager, messages) {
@@ -128,15 +182,11 @@ function snapshotFromGameStateWords(gsWords, visibleFaces) {
 function formatInputSnapshot(input) {
   if (!input) return 'input_snapshot_zero';
   const fmt = b => (b ? 'true' : 'false');
-  const fmtQ = x => {
-    const r = Math.round(x * 1000);
-    return `(${r} # 1000)`;
-  };
   return `(mk_input_snapshot ` +
     `${fmt(input.forward)} ${fmt(input.back)} ` +
     `${fmt(input.left)} ${fmt(input.right)} ` +
     `${fmt(input.jump)} ` +
-    `${fmtQ(input.yawDelta || 0)} ${fmtQ(input.pitchDelta || 0)} ` +
+    `${formatQ(input.yawDelta || 0, 1000)} ${formatQ(input.pitchDelta || 0, 1000)} ` +
     `${Math.round(input.dtMs || 0)})`;
 }
 
@@ -201,7 +251,7 @@ async function ensureBridgeHelpersReady(manager) {
 
 async function evalInitialGameStateWords(manager, sid, world) {
   const command =
-    `Eval cbv in (initial_game_state_words_from_entities ` +
+    `Eval vm_compute in (initial_game_state_words_from_entities ` +
     `${formatEntities(world.entities)}).`;
   const messages = await manager.coq.queryPromise(sid, ['Vernac', command]);
   const words = parseZList(flattenMessages(manager, messages));
@@ -214,15 +264,15 @@ async function evalInitialGameStateWords(manager, sid, world) {
 
 async function evalVisibleFaces(manager, sid, world) {
   const command =
-    `Eval cbv in (initial_visible_faces_from_inputs ` +
+    `Eval vm_compute in (initial_visible_faces_from_inputs ` +
     `${formatEntities(world.entities)} ${formatFaces(world.faces)} ${formatTextures(world.textures)}).`;
   const messages = await manager.coq.queryPromise(sid, ['Vernac', command]);
   return parseZList(flattenMessages(manager, messages));
 }
 
-async function evalStepWorldWords(manager, sid, gsWords, inputSnapshot) {
+async function evalStepWorldWords(manager, sid, collisionWorldExpr, gsWords, inputSnapshot) {
   const command =
-    `Eval cbv in (step_world_words ` +
+    `Eval vm_compute in (step_world_words_in_world ${collisionWorldExpr} ` +
     `${formatZList(gsWords)} ${formatInputSnapshot(inputSnapshot)}).`;
   const messages = await manager.coq.queryPromise(sid, ['Vernac', command]);
   const words = parseZList(flattenMessages(manager, messages));
@@ -238,6 +288,7 @@ export function createRocqBridge(manager) {
   let gsWords = null;        // current game-state word list
   let initialGsWords = null; // snapshot saved at load_world for reset()
   let visibleFaces = null;   // static visible-face indices (no PVS yet)
+  let collisionWorldExpr = null;
 
   function getBridgeHelpersSid() {
     bridgeHelpersSidPromise ||= ensureBridgeHelpersReady(manager);
@@ -257,6 +308,7 @@ export function createRocqBridge(manager) {
         evalInitialGameStateWords(manager, sid, world),
         evalVisibleFaces(manager, sid, world),
       ]);
+      collisionWorldExpr = formatCollisionWorld(world);
       gsWords        = words;
       initialGsWords = [...words];
       visibleFaces   = faces;
@@ -266,7 +318,7 @@ export function createRocqBridge(manager) {
     async step(inputSnapshot) {
       assertLoaded();
       const sid = await getBridgeHelpersSid();
-      gsWords = await evalStepWorldWords(manager, sid, gsWords, inputSnapshot);
+      gsWords = await evalStepWorldWords(manager, sid, collisionWorldExpr, gsWords, inputSnapshot);
       return snapshotFromGameStateWords(gsWords, visibleFaces);
     },
 

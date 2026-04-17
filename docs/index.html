@@ -516,12 +516,28 @@
     const placeholderDetail =
       gamePlaceholder.querySelector('[data-placeholder-role="detail"]');
 
+    function textOrEmpty(value) {
+      return value == null ? '' : String(value);
+    }
+
+    function errorDetail(value, fallback = 'Unknown error') {
+      if (typeof value?.message === 'string' && value.message.length > 0) {
+        return value.message;
+      }
+      if (typeof value === 'string' && value.length > 0) {
+        return value;
+      }
+      return fallback;
+    }
+
     function showPlaceholder(title, detail = '', state = 'loading') {
+      const safeTitle = textOrEmpty(title);
+      const safeDetail = textOrEmpty(detail);
       gamePlaceholder.hidden = false;
       gamePlaceholder.dataset.state = state;
-      placeholderTitle.textContent = title;
-      placeholderDetail.textContent = detail;
-      placeholderDetail.hidden = detail.length === 0;
+      placeholderTitle.textContent = safeTitle;
+      placeholderDetail.textContent = safeDetail;
+      placeholderDetail.hidden = safeDetail.length === 0;
     }
 
     function hidePlaceholder() {
@@ -549,11 +565,12 @@
     // Catch anything that slips through — script errors, failed fetches,
     // JsCoq internal errors that bubble up as uncaught exceptions.
     window.addEventListener('error', (e) => {
-      showStatus(`Error: ${e.message}`, 'error');
-      showPlaceholder('Browser startup failed', e.message, 'error');
+      const msg = errorDetail(e);
+      showStatus(`Error: ${msg}`, 'error');
+      showPlaceholder('Browser startup failed', msg, 'error');
     });
     window.addEventListener('unhandledrejection', (e) => {
-      const msg = e.reason?.message || e.reason || 'Unknown error';
+      const msg = errorDetail(e.reason);
       showStatus(`Error: ${msg}`, 'error');
       showPlaceholder('Browser startup failed', msg, 'error');
     });
@@ -694,8 +711,9 @@
       rocqBridge = createRocqBridge(coq);
       jscoqOk = true;
     } catch (err) {
-      showStatus(`Failed to load JsCoq: ${err.message}`, 'error');
-      showPlaceholder('JsCoq startup failed', err.message, 'error');
+      const msg = errorDetail(err);
+      showStatus(`Failed to load JsCoq: ${msg}`, 'error');
+      showPlaceholder('JsCoq startup failed', msg, 'error');
       console.error('JsCoq bootstrap failed:', err);
     }
 
@@ -722,8 +740,9 @@
     } catch (err) {
       console.error('Asset loading failed:', err);
       window.orlyAssets = new Map();
-      showPlaceholder('Asset loading failed', err.message, 'error');
-      if (jscoqOk) showStatus(`Failed to load assets: ${err.message}`, 'error');
+      const msg = errorDetail(err);
+      showPlaceholder('Asset loading failed', msg, 'error');
+      if (jscoqOk) showStatus(`Failed to load assets: ${msg}`, 'error');
     }
 
     // ── game canvas sizing ───────────────────────────────────────
@@ -889,8 +908,9 @@
         console.log('orly: render pipeline active — snapshot seeded from Rocq state');
       } catch (err) {
         console.error('BSP render init failed:', err);
-        showStatus(`Render error: ${err.message}`, 'error');
-        showPlaceholder('Render startup failed', err.message, 'error');
+        const msg = errorDetail(err);
+        showStatus(`Render error: ${msg}`, 'error');
+        showPlaceholder('Render startup failed', msg, 'error');
       }
     }
     // ── direction-aware drag-to-resize ───────────────────────────

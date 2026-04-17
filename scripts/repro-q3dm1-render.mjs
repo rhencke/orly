@@ -23,6 +23,8 @@ const TIMEOUT_MS = Number.parseInt(process.env.ORLY_REPRO_TIMEOUT_MS ?? '20000',
 const POLL_MS = 500;
 const BOOTSTRAP_FAILURE_RE =
   /launch failure SecurityError|Failed to construct 'Worker'|JsCoq bootstrap failed/i;
+const ROCQ_STARTUP_FAILURE_RE =
+  /Coq Exception|Cannot find a physical path bound to logical path|Rocq bridge helper definitions were not found/i;
 const RENDER_FAILURE_RE = /BSP render init failed|Render error:/i;
 const SUCCESSFUL_RENDER_RE = /render pipeline active/i;
 const MIN_TOUCH_TARGET_PX = 44;
@@ -328,7 +330,52 @@ function hasEvent(consoleEvents, pattern) {
   return consoleEvents.some(event => pattern.test(event.text));
 }
 
+function findEvent(consoleEvents, predicate) {
+  return consoleEvents.find(predicate) ?? null;
+}
+
+function formatEventLocation(event) {
+  const url = event.location?.url;
+  const lineNumber = event.location?.lineNumber;
+  const columnNumber = event.location?.columnNumber;
+  if (!url) return '';
+  const line = Number.isInteger(lineNumber) ? lineNumber + 1 : null;
+  const column = Number.isInteger(columnNumber) ? columnNumber + 1 : null;
+  if (line !== null && column !== null) {
+    return ` @ ${url}:${line}:${column}`;
+  }
+  if (line !== null) {
+    return ` @ ${url}:${line}`;
+  }
+  return ` @ ${url}`;
+}
+
+function summarizeEvent(event) {
+  if (!event) return '';
+  const text = String(event.text ?? '').trim();
+  if (event.kind === 'pageerror') {
+    const stack = String(event.stack ?? '').trim();
+    if (stack) {
+      return `${text}\n${stack}`;
+    }
+  }
+  return `${text}${formatEventLocation(event)}`;
+}
+
+function detectRocqStartupFailure(consoleEvents) {
+  return findEvent(
+    consoleEvents,
+    event =>
+      ROCQ_STARTUP_FAILURE_RE.test(event.text) ||
+      (event.kind === 'console' && event.type === 'error' && /CoqExn/i.test(event.text))
+  );
+}
+
 function detectFailure(snapshot, consoleEvents) {
+  const rocqStartupFailure = detectRocqStartupFailure(consoleEvents);
+  if (rocqStartupFailure) {
+    return `rocq-startup-failed: ${summarizeEvent(rocqStartupFailure)}`;
+  }
   if (hasEvent(consoleEvents, BOOTSTRAP_FAILURE_RE)) {
     return 'jscoq-bootstrap-failed';
   }
@@ -358,16 +405,25 @@ async function waitForScenario(page, consoleEvents, predicate) {
 
 function attachEventCapture(page, consoleEvents) {
   page.on('console', msg => {
+    const location = msg.location();
     consoleEvents.push({
       kind: 'console',
       type: msg.type(),
       text: msg.text(),
+      location: location?.url
+        ? {
+            url: location.url,
+            lineNumber: location.lineNumber,
+            columnNumber: location.columnNumber,
+          }
+        : null,
     });
   });
   page.on('pageerror', error => {
     consoleEvents.push({
       kind: 'pageerror',
       text: error.message,
+      stack: error.stack ?? '',
     });
   });
   page.on('requestfailed', request => {

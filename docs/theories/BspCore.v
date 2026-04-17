@@ -7,9 +7,9 @@
     These primitives are the only code that touches raw bytes; all lump
     parsers call these and never index into [bytes] directly. *)
 
-From Stdlib Require Import List.
-From Stdlib Require Import ZArith.
-From Stdlib Require Import QArith.
+Require Import List.
+Require Import ZArith.
+Require Import QArith.
 Import ListNotations.
 Open Scope Z_scope.
 
@@ -192,9 +192,9 @@ Proof. vm_compute. reflexivity. Qed.
 
     All characters are [Z] values representing ASCII code points. *)
 
-From Stdlib Require Import List.
-From Stdlib Require Import ZArith.
-From Stdlib Require Import Bool.
+Require Import List.
+Require Import ZArith.
+Require Import Bool.
 Import ListNotations.
 Open Scope Z_scope.
 
@@ -606,10 +606,10 @@ Proof. vm_compute. reflexivity. Qed.
     All spatial quantities use [Q] rationals, matching the BSP parser
     conventions in [BspPlaneVertex].  Angles are in degrees (Q). *)
 
-From Stdlib Require Import List.
-From Stdlib Require Import ZArith.
-From Stdlib Require Import QArith.
-From Stdlib Require Import Lia.
+Require Import List.
+Require Import ZArith.
+Require Import QArith.
+Require Import Lia.
 Import ListNotations.
 Open Scope Z_scope.
 

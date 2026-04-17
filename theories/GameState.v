@@ -53,6 +53,13 @@ Definition vec3_add (a b : vec3) : vec3 :=
     (v3_y a + v3_y b)
     (v3_z a + v3_z b).
 
+(** Vector subtraction. *)
+Definition vec3_sub (a b : vec3) : vec3 :=
+  mk_vec3
+    (v3_x a - v3_x b)
+    (v3_y a - v3_y b)
+    (v3_z a - v3_z b).
+
 (** Scalar multiplication of a vector. *)
 Definition vec3_scale (k : Q) (v : vec3) : vec3 :=
   mk_vec3
@@ -144,10 +151,17 @@ Record collision_brush_input : Type := mk_collision_brush_input
 Record collision_brush_side_input : Type := mk_collision_brush_side_input
   { cbsi_plane_index : Z }.
 
+(** Minimal BSP submodel data needed for trigger volumes. *)
+Record collision_model_input : Type := mk_collision_model_input
+  { cmi_first_brush : Z
+  ; cmi_num_brushes : Z
+  }.
+
 (** Static BSP collision data provided by the browser at world load. *)
 Record collision_world_input : Type := mk_collision_world_input
   { cwi_planes      : list collision_plane_input
   ; cwi_textures    : list collision_texture_input
+  ; cwi_models      : list collision_model_input
   ; cwi_brushes     : list collision_brush_input
   ; cwi_brush_sides : list collision_brush_side_input
   }.
@@ -219,7 +233,7 @@ Definition visible_face_indices
   visible_face_indices_aux faces textures 0.
 
 Definition collision_world_empty : collision_world_input :=
-  mk_collision_world_input [] [] [] [].
+  mk_collision_world_input [] [] [] [] [].
 
 Definition contents_solid : Z := 1.
 
@@ -664,6 +678,7 @@ Definition player_radius : Q := 16.
 Definition ground_probe_distance : Q := 1.
 Definition gravity_accel : Q := 800.
 Definition jump_speed : Q := 270.
+Definition trigger_push_travel_time : Q := 1.
 Definition collision_sweep_iterations : nat := 8%nat.
 Definition collision_motion_substeps : nat := 16%nat.
 Definition collision_motion_substep_scale : Q := (1 # 16)%Q.
@@ -705,6 +720,19 @@ Definition point_collides_brushb
     end
   else false.
 
+Definition point_collides_brush_geometryb
+    (world : collision_world_input) (pos : vec3) (br : collision_brush_input) : bool :=
+  match Z.max 0 (cbi_num_sides br) with
+  | 0 => false
+  | n =>
+      point_collides_brush_aux
+        (cwi_planes world)
+        (cwi_brush_sides world)
+        pos
+        (cbi_first_side br)
+        (Z.to_nat n)
+  end.
+
 Fixpoint point_collides_world_aux
     (world : collision_world_input) (pos : vec3)
     (brushes : list collision_brush_input) : bool :=
@@ -718,6 +746,69 @@ Fixpoint point_collides_world_aux
 Definition point_collides_worldb
     (world : collision_world_input) (pos : vec3) : bool :=
   point_collides_world_aux world pos (cwi_brushes world).
+
+Fixpoint point_collides_model_brushes_aux
+    (world : collision_world_input) (pos : vec3)
+    (brush_index : Z) (fuel : nat) : bool :=
+  match fuel with
+  | O => false
+  | S fuel' =>
+      match nth_z (cwi_brushes world) brush_index with
+      | None => false
+      | Some br =>
+          if point_collides_brush_geometryb world pos br
+          then true
+          else point_collides_model_brushes_aux world pos (brush_index + 1) fuel'
+      end
+  end.
+
+Definition point_collides_modelb
+    (world : collision_world_input) (pos : vec3) (model : collision_model_input) : bool :=
+  match Z.max 0 (cmi_num_brushes model) with
+  | 0 => false
+  | n =>
+      point_collides_model_brushes_aux
+        world pos (cmi_first_brush model) (Z.to_nat n)
+  end.
+
+Definition entity_inside_trigger_modelb
+    (world : collision_world_input) (pos : vec3) (es : entity_state) : bool :=
+  match nth_z (cwi_models world) (es_model_index es) with
+  | Some model => point_collides_modelb world pos model
+  | None => false
+  end.
+
+Definition trigger_push_velocity
+    (pos target_origin : vec3) : vec3 :=
+  let delta := vec3_sub target_origin pos in
+  let t := trigger_push_travel_time in
+  mk_vec3
+    (v3_x delta / t)
+    (v3_y delta / t)
+    ((v3_z delta / t) + gravity_accel * t / 2)%Q.
+
+Fixpoint apply_trigger_pushes
+    (world : collision_world_input) (pos : vec3)
+    (entities : list entity_state)
+    : option vec3 * list entity_state :=
+  match entities with
+  | [] => (None, [])
+  | es :: rest =>
+      let inside := entity_inside_trigger_modelb world pos es in
+      let fired := es_active es && inside in
+      let updated :=
+        mk_entity_state
+          (es_entity_index es)
+          (es_model_index es)
+          (es_origin es)
+          (negb inside) in
+      let '(rest_impulse, rest_entities) := apply_trigger_pushes world pos rest in
+      let impulse :=
+        if fired
+        then Some (trigger_push_velocity pos (es_origin es))
+        else rest_impulse in
+      (impulse, updated :: rest_entities)
+  end.
 
 Fixpoint sweep_to_contact
     (world : collision_world_input) (lo hi : vec3) (fuel : nat) : vec3 :=
@@ -1110,19 +1201,31 @@ Definition step_world_in_world
   let '(position, vertical_blocked) :=
     resolve_motion_substeps world horizontal_pos vertical_delta in
   let landed := vertical_blocked && qleb desired_vel_z 0 in
-  let on_ground := landed || grounded_by_worldb world position in
-  let velocity :=
+  let base_on_ground := landed || grounded_by_worldb world position in
+  let base_velocity :=
     mk_vec3
       (if horizontal_blocked then 0 else v3_x desired_planar)
       (if horizontal_blocked then 0 else v3_y desired_planar)
       (if vertical_blocked then 0 else desired_vel_z) in
+  let '(trigger_impulse, entities) :=
+    apply_trigger_pushes world position (gs_entities gs) in
+  let velocity :=
+    match trigger_impulse with
+    | Some impulse => impulse
+    | None => base_velocity
+    end in
+  let on_ground :=
+    match trigger_impulse with
+    | Some _ => false
+    | None => base_on_ground
+    end in
   mk_game_state
     position
     velocity
     yaw
     pitch
     on_ground
-    (gs_entities gs)
+    entities
     (gs_tick gs + 1).
 
 (** Bridge-facing word-level entry point for per-frame stepping.
@@ -1310,10 +1413,11 @@ Definition sample_floor_world : collision_world_input :=
     ; mk_collision_plane_input (-1)   0    0 1024
     ; mk_collision_plane_input   0    1    0 1024
     ; mk_collision_plane_input   0  (-1)   0 1024
-    ; mk_collision_plane_input   0    0    1    0
-    ; mk_collision_plane_input   0    0  (-1)  64
-    ]
+     ; mk_collision_plane_input   0    0    1    0
+     ; mk_collision_plane_input   0    0  (-1)  64
+     ]
     [sample_solid_texture]
+    []
     [mk_collision_brush_input 0 6 0]
     [ mk_collision_brush_side_input 0
     ; mk_collision_brush_side_input 1
@@ -1329,10 +1433,31 @@ Definition sample_wall_world : collision_world_input :=
     ; mk_collision_plane_input (-1)   0    0  (-32)
     ; mk_collision_plane_input   0    1    0 1024
     ; mk_collision_plane_input   0  (-1)   0 1024
-    ; mk_collision_plane_input   0    0    1 1024
-    ; mk_collision_plane_input   0    0  (-1) 1024
-    ]
+     ; mk_collision_plane_input   0    0    1 1024
+     ; mk_collision_plane_input   0    0  (-1) 1024
+     ]
     [sample_solid_texture]
+    []
+    [mk_collision_brush_input 0 6 0]
+    [ mk_collision_brush_side_input 0
+    ; mk_collision_brush_side_input 1
+    ; mk_collision_brush_side_input 2
+    ; mk_collision_brush_side_input 3
+    ; mk_collision_brush_side_input 4
+    ; mk_collision_brush_side_input 5
+    ].
+
+Definition sample_trigger_world : collision_world_input :=
+  mk_collision_world_input
+    [ mk_collision_plane_input   1    0    0   32
+    ; mk_collision_plane_input (-1)   0    0   32
+    ; mk_collision_plane_input   0    1    0   32
+    ; mk_collision_plane_input   0  (-1)   0   32
+    ; mk_collision_plane_input   0    0    1    0
+    ; mk_collision_plane_input   0    0  (-1)  64
+    ]
+    []
+    [mk_collision_model_input 0 1]
     [mk_collision_brush_input 0 6 0]
     [ mk_collision_brush_side_input 0
     ; mk_collision_brush_side_input 1
@@ -1374,3 +1499,23 @@ Proof. vm_compute. reflexivity. Qed.
 Lemma point_collides_worldb_sample_wall :
   point_collides_worldb sample_wall_world (mk_vec3 16 0 128) = true.
 Proof. vm_compute. reflexivity. Qed.
+
+Lemma point_collides_modelb_sample_trigger :
+  point_collides_modelb sample_trigger_world (mk_vec3 0 0 16)
+    (mk_collision_model_input 0 1) = true.
+Proof. vm_compute. reflexivity. Qed.
+
+Lemma step_world_in_world_trigger_push_example :
+  let stepped :=
+    step_world_in_world sample_trigger_world
+      (mk_game_state
+         (mk_vec3 0 0 16)
+         vec3_zero
+         0 0 false
+         [mk_entity_state 0 0 (mk_vec3 0 0 256) true]
+         0)
+      input_snapshot_zero in
+  v3_z (gs_velocity stepped) == 640 /\
+  gs_on_ground stepped = false /\
+  gs_entities stepped = [mk_entity_state 0 0 (mk_vec3 0 0 256) false].
+Proof. vm_compute. repeat split; reflexivity. Qed.

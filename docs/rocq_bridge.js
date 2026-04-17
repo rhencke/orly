@@ -59,6 +59,14 @@ function formatCollisionTextures(textures) {
   return `[${textures.map(formatCollisionTexture).join('; ')}]`;
 }
 
+function formatModel(model) {
+  return `(mk_collision_model_input ${model.firstBrush} ${model.numBrushes})`;
+}
+
+function formatModels(models) {
+  return `[${models.map(formatModel).join('; ')}]`;
+}
+
 function formatFace(face) {
   return `(mk_render_face_input ${face.texture} ${face.type} ${face.nVertexes} ` +
     `${face.nMeshverts} ${face.sizeX} ${face.sizeY})`;
@@ -94,15 +102,11 @@ function formatBrushSides(brushSides) {
 }
 
 function formatCollisionWorld(world) {
-  const blockingBrushes = world.brushes.filter(brush => {
-    const texture = world.textures[brush.textureIndex];
-    if (!texture) return false;
-    return (texture.contents & (CONTENTS_SOLID | CONTENTS_PLAYERCLIP)) !== 0;
-  });
   return `(mk_collision_world_input ` +
     `${formatPlanes(world.planes)} ` +
     `${formatCollisionTextures(world.textures)} ` +
-    `${formatBrushes(blockingBrushes)} ` +
+    `${formatModels(world.models || [])} ` +
+    `${formatBrushes(world.brushes)} ` +
     `${formatBrushSides(world.brushSides)})`;
 }
 

@@ -38,6 +38,19 @@ jobs:
           rm -rf docs/assets
           make stage-pages-map
 
+      - name: Stamp demo build metadata
+        run: |
+          demo_version="$(node -p "require('./package.json').version")"
+          built_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          cat > docs/build-info.json <<EOF
+          {
+            "version": "${demo_version}",
+            "gitSha": "${GITHUB_SHA}",
+            "builtAt": "${built_at}",
+            "source": "github-actions"
+          }
+          EOF
+
       - name: Verify licensed Pages map artifact
         run: |
           expected_sha256='dc86e859e7f4eeadc734308bbd68326b32e9ab2532c316b252ec944ff03a5ce4'
@@ -47,7 +60,10 @@ jobs:
 
           test -f docs/assets/manifest.json
           test -f docs/assets/maps/am_lavaarena.bsp
+          test -f docs/build-info.json
           grep -Fx '  "maps/am_lavaarena.bsp"' docs/assets/manifest.json
+          grep -F "\"gitSha\": \"${GITHUB_SHA}\"" docs/build-info.json
+          grep -F '"source": "github-actions"' docs/build-info.json
           test "$actual_sha256" = "$expected_sha256"
           test "$actual_size" = "$expected_size"
           cmp --silent docs/vendor/maps/openarena/am_lavaarena.bsp docs/assets/maps/am_lavaarena.bsp

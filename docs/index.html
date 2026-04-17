@@ -117,6 +117,14 @@
       background:
         radial-gradient(circle at center, rgb(13 17 30 / 74%), rgb(0 0 0 / 92%));
     }
+    #game-placeholder .title-row {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+      max-width: min(32rem, calc(100% - 2rem));
+    }
     #game-placeholder .label {
       font-size: 1.5rem;
       color: #f3f7ff;
@@ -125,6 +133,42 @@
       max-width: min(28rem, calc(100% - 2rem));
       color: #b7c4db;
       line-height: 1.45;
+    }
+    #copy-error-report {
+      padding: 0.45rem 0.85rem;
+      border: 1px solid rgb(255 180 180 / 36%);
+      border-radius: 999px;
+      background: rgb(39 11 11 / 72%);
+      color: #ffe0e0;
+      font: inherit;
+      font-size: 0.82rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      pointer-events: auto;
+      cursor: pointer;
+    }
+    #copy-error-report:hover {
+      background: rgb(65 18 18 / 80%);
+      border-color: rgb(255 180 180 / 54%);
+    }
+    #copy-error-report:focus-visible {
+      outline: 2px solid #ffd3d3;
+      outline-offset: 2px;
+    }
+    #error-copy-fallback {
+      width: min(34rem, calc(100% - 2rem));
+      min-height: 11rem;
+      padding: 0.85rem;
+      border: 1px solid rgb(255 180 180 / 28%);
+      border-radius: 0.75rem;
+      background: rgb(18 6 6 / 92%);
+      color: #ffe7e7;
+      font: 0.78rem/1.45 ui-monospace, SFMono-Regular, SFMono-Regular, Consolas, monospace;
+      resize: vertical;
+      pointer-events: auto;
+    }
+    #error-copy-fallback::selection {
+      background: rgb(160 196 255 / 36%);
     }
     #game-placeholder[data-state="error"] .label {
       color: #ffb4b4;
@@ -474,10 +518,25 @@
           </div>
         </div>
         <div id="game-placeholder" data-state="loading" aria-live="polite">
-          <span class="label" data-placeholder-role="title">Loading browser shell…</span>
+          <div class="title-row">
+            <span class="label" data-placeholder-role="title">Loading browser shell…</span>
+            <button
+              id="copy-error-report"
+              type="button"
+              data-placeholder-role="copy-button"
+              hidden
+            >Copy</button>
+          </div>
           <span class="detail" data-placeholder-role="detail">
             Booting JsCoq and checking whether a playable BSP is available.
           </span>
+          <textarea
+            id="error-copy-fallback"
+            data-placeholder-role="copy-fallback"
+            aria-label="Selectable error report text"
+            readonly
+            hidden
+          ></textarea>
         </div>
     </div>
 
@@ -515,19 +574,272 @@
       gamePlaceholder.querySelector('[data-placeholder-role="title"]');
     const placeholderDetail =
       gamePlaceholder.querySelector('[data-placeholder-role="detail"]');
+    const copyErrorButton =
+      gamePlaceholder.querySelector('[data-placeholder-role="copy-button"]');
+    const copyFallback =
+      gamePlaceholder.querySelector('[data-placeholder-role="copy-fallback"]');
+
+    const COPY_BUTTON_LABEL = 'Copy';
+    const COPY_BUTTON_COPIED_LABEL = 'Copied!';
+    let copyFeedbackTimeoutId = null;
 
     function textOrEmpty(value) {
       return value == null ? '' : String(value);
     }
 
+    function firstNonEmptyText(...values) {
+      for (const value of values) {
+        const text = textOrEmpty(value).trim();
+        if (text.length > 0) return text;
+      }
+      return '';
+    }
+
+    function stringifyErrorValue(value) {
+      if (value == null) return '';
+      if (typeof value === 'string') return value;
+      if (value instanceof Error) {
+        return firstNonEmptyText(value.stack, value.message, value.name);
+      }
+      try {
+        const seen = new WeakSet();
+        const json = JSON.stringify(
+          value,
+          (_key, current) => {
+            if (typeof current === 'bigint') return current.toString();
+            if (current instanceof Error) {
+              return {
+                name: current.name,
+                message: current.message,
+                stack: current.stack ?? '',
+              };
+            }
+            if (typeof current !== 'object' || current === null) return current;
+            if (seen.has(current)) return '[Circular]';
+            seen.add(current);
+            return current;
+          },
+          2
+        );
+        if (typeof json === 'string' && json.length > 0) return json;
+      } catch {}
+      return textOrEmpty(value);
+    }
+
+    function errorLocation(value) {
+      const url = firstNonEmptyText(value?.filename, value?.sourceURL);
+      const line = Number.isInteger(value?.lineno) ? value.lineno : null;
+      const column = Number.isInteger(value?.colno) ? value.colno : null;
+      if (!url && line === null && column === null) return null;
+      return { url, line, column };
+    }
+
+    function normalizeErrorReport(value, fallback = 'Unknown error') {
+      const errorValue = value?.error ?? value?.reason ?? value;
+      const message = firstNonEmptyText(
+        value?.message,
+        errorValue?.message,
+        typeof errorValue === 'string' ? errorValue : '',
+        stringifyErrorValue(errorValue),
+        stringifyErrorValue(value),
+        fallback
+      );
+      const stack = firstNonEmptyText(errorValue?.stack, value?.stack);
+      const name = firstNonEmptyText(errorValue?.name, value?.name);
+      const raw = firstNonEmptyText(
+        stringifyErrorValue(errorValue),
+        stringifyErrorValue(value)
+      );
+      return {
+        message,
+        stack,
+        name,
+        raw,
+        location: errorLocation(value),
+      };
+    }
+
     function errorDetail(value, fallback = 'Unknown error') {
-      if (typeof value?.message === 'string' && value.message.length > 0) {
-        return value.message;
+      return normalizeErrorReport(value, fallback).message;
+    }
+
+    const DEFAULT_BUILD_INFO = Object.freeze({
+      version: '1.0.0',
+      gitSha: 'unknown',
+      builtAt: 'unknown',
+      source: 'checked-in-default',
+    });
+
+    function normalizeBuildInfo(value) {
+      if (typeof value !== 'object' || value === null) return null;
+      const buildInfo = {
+        version: firstNonEmptyText(value.version, DEFAULT_BUILD_INFO.version),
+        gitSha: firstNonEmptyText(value.gitSha, DEFAULT_BUILD_INFO.gitSha),
+        builtAt: firstNonEmptyText(value.builtAt, DEFAULT_BUILD_INFO.builtAt),
+        source: firstNonEmptyText(value.source, DEFAULT_BUILD_INFO.source),
+      };
+      const loadError = firstNonEmptyText(value.loadError);
+      if (loadError.length > 0) buildInfo.loadError = loadError;
+      return buildInfo;
+    }
+
+    function currentBuildInfo() {
+      const buildInfo = normalizeBuildInfo(window.orlyBuildInfo);
+      return buildInfo ? { ...buildInfo } : { ...DEFAULT_BUILD_INFO };
+    }
+
+    async function loadBuildInfo() {
+      const buildInfoUrl = new URL('./build-info.json', window.location.href);
+      try {
+        const resp = await fetch(buildInfoUrl);
+        if (!resp.ok) throw new Error(`build metadata fetch failed: HTTP ${resp.status}`);
+        const buildInfo = normalizeBuildInfo(await resp.json());
+        if (!buildInfo) throw new Error('build metadata payload is not an object');
+        return buildInfo;
+      } catch (err) {
+        return {
+          ...DEFAULT_BUILD_INFO,
+          source: 'fallback',
+          loadError: errorDetail(err),
+        };
       }
-      if (typeof value === 'string' && value.length > 0) {
-        return value;
+    }
+
+    function clearCopyFeedbackTimer() {
+      if (copyFeedbackTimeoutId !== null) {
+        window.clearTimeout(copyFeedbackTimeoutId);
+        copyFeedbackTimeoutId = null;
       }
-      return fallback;
+    }
+
+    function resetErrorCopyUi() {
+      clearCopyFeedbackTimer();
+      copyErrorButton.textContent = COPY_BUTTON_LABEL;
+      copyFallback.hidden = true;
+      copyFallback.value = '';
+    }
+
+    function syncErrorCopyUi() {
+      const hasErrorReport =
+        gamePlaceholder.dataset.state === 'error' && window.orlyErrorReport !== null;
+      copyErrorButton.hidden = !hasErrorReport;
+      if (!hasErrorReport) resetErrorCopyUi();
+    }
+
+    function formatErrorLocation(location) {
+      if (!location) return 'unknown';
+      const parts = [];
+      const url = firstNonEmptyText(location.url);
+      if (url.length > 0) parts.push(url);
+      if (Number.isInteger(location.line)) parts.push(`line ${location.line}`);
+      if (Number.isInteger(location.column)) parts.push(`column ${location.column}`);
+      return parts.length > 0 ? parts.join(', ') : 'unknown';
+    }
+
+    function formatBuildMetadata(build) {
+      const buildInfo = normalizeBuildInfo(build) ?? DEFAULT_BUILD_INFO;
+      const lines = [
+        `Build version: ${buildInfo.version}`,
+        `Build git SHA: ${buildInfo.gitSha}`,
+        `Build timestamp: ${buildInfo.builtAt}`,
+        `Build source: ${buildInfo.source}`,
+      ];
+      const loadError = firstNonEmptyText(build?.loadError);
+      if (loadError.length > 0) {
+        lines.push(`Build metadata load error: ${loadError}`);
+      }
+      return lines;
+    }
+
+    function formatErrorReportForClipboard(report = window.orlyErrorReport) {
+      if (!report) return '';
+      const raw = firstNonEmptyText(report.raw);
+      const stack = firstNonEmptyText(report.stack);
+      const lines = [
+        '```text',
+        `Title: ${firstNonEmptyText(report.title, 'Unknown title')}`,
+        `Status: ${firstNonEmptyText(report.status, 'Unknown status')}`,
+        `Message: ${firstNonEmptyText(report.message, 'Unknown error')}`,
+        `Source: ${firstNonEmptyText(report.source, 'unknown')}`,
+        `Captured at: ${firstNonEmptyText(report.capturedAt, 'unknown')}`,
+        `Page URL: ${window.location.href}`,
+        `User agent: ${navigator.userAgent}`,
+        ...formatBuildMetadata(report.build),
+        `Location: ${formatErrorLocation(report.location)}`,
+        '',
+        'Stack trace:',
+        stack.length > 0 ? stack : '(missing)',
+      ];
+      if (raw.length > 0 && raw !== stack) {
+        lines.push('', 'Raw error:', raw);
+      }
+      lines.push('```');
+      return lines.join('\n');
+    }
+
+    function showCopyFallback(text) {
+      copyFallback.value = text;
+      copyFallback.hidden = false;
+      copyFallback.focus();
+      copyFallback.select();
+      copyFallback.setSelectionRange(0, text.length);
+    }
+
+    function showCopiedFeedback() {
+      clearCopyFeedbackTimer();
+      copyErrorButton.textContent = COPY_BUTTON_COPIED_LABEL;
+      copyFeedbackTimeoutId = window.setTimeout(() => {
+        copyErrorButton.textContent = COPY_BUTTON_LABEL;
+        copyFeedbackTimeoutId = null;
+      }, 1000);
+    }
+
+    async function copyCurrentErrorReport() {
+      const text = formatErrorReportForClipboard();
+      if (text.length === 0) return;
+      if (typeof navigator.clipboard?.writeText === 'function') {
+        try {
+          await navigator.clipboard.writeText(text);
+          copyFallback.hidden = true;
+          copyFallback.value = '';
+          showCopiedFeedback();
+          return;
+        } catch (err) {
+          console.warn('Clipboard write failed, falling back to selectable text:', err);
+        }
+      }
+      copyErrorButton.textContent = COPY_BUTTON_LABEL;
+      showCopyFallback(text);
+    }
+
+    function clearErrorReport() {
+      window.orlyErrorReport = null;
+      syncErrorCopyUi();
+    }
+
+    function captureErrorReport({
+      source,
+      title,
+      status,
+      error,
+      fallback = 'Unknown error',
+    }) {
+      const report = {
+        source: textOrEmpty(source),
+        title: textOrEmpty(title),
+        status: textOrEmpty(status),
+        capturedAt: new Date().toISOString(),
+        build: currentBuildInfo(),
+        ...normalizeErrorReport(error, fallback),
+      };
+      window.orlyErrorReport = report;
+      if (report.status.length > 0) {
+        showStatus(report.status, 'error');
+      }
+      showPlaceholder(report.title, report.message, 'error');
+      resetErrorCopyUi();
+      syncErrorCopyUi();
+      return report;
     }
 
     function showPlaceholder(title, detail = '', state = 'loading') {
@@ -538,11 +850,14 @@
       placeholderTitle.textContent = safeTitle;
       placeholderDetail.textContent = safeDetail;
       placeholderDetail.hidden = safeDetail.length === 0;
+      if (state !== 'error') clearErrorReport();
+      else syncErrorCopyUi();
     }
 
     function hidePlaceholder() {
       gamePlaceholder.hidden = true;
       gamePlaceholder.dataset.state = 'ready';
+      clearErrorReport();
     }
 
     function showStatus(msg, type = 'loading') {
@@ -557,6 +872,12 @@
       statusBar.textContent = '';
     }
 
+    window.orlyBuildInfo = await loadBuildInfo();
+    clearErrorReport();
+    copyErrorButton.addEventListener('click', () => {
+      void copyCurrentErrorReport();
+    });
+
     const GAME_TICK_MS = 16;
     const MAX_FRAME_DT_MS = 100;
     const MAX_SIMULATION_STEPS = 6;
@@ -566,13 +887,21 @@
     // JsCoq internal errors that bubble up as uncaught exceptions.
     window.addEventListener('error', (e) => {
       const msg = errorDetail(e);
-      showStatus(`Error: ${msg}`, 'error');
-      showPlaceholder('Browser startup failed', msg, 'error');
+      captureErrorReport({
+        source: 'window-error',
+        title: 'Browser startup failed',
+        status: `Error: ${msg}`,
+        error: e,
+      });
     });
     window.addEventListener('unhandledrejection', (e) => {
       const msg = errorDetail(e.reason);
-      showStatus(`Error: ${msg}`, 'error');
-      showPlaceholder('Browser startup failed', msg, 'error');
+      captureErrorReport({
+        source: 'unhandled-rejection',
+        title: 'Browser startup failed',
+        status: `Error: ${msg}`,
+        error: e,
+      });
     });
 
     // ── asset loader ─────────────────────────────────────────────
@@ -712,8 +1041,12 @@
       jscoqOk = true;
     } catch (err) {
       const msg = errorDetail(err);
-      showStatus(`Failed to load JsCoq: ${msg}`, 'error');
-      showPlaceholder('JsCoq startup failed', msg, 'error');
+      captureErrorReport({
+        source: 'jscoq-bootstrap',
+        title: 'JsCoq startup failed',
+        status: `Failed to load JsCoq: ${msg}`,
+        error: err,
+      });
       console.error('JsCoq bootstrap failed:', err);
     }
 
@@ -741,8 +1074,12 @@
       console.error('Asset loading failed:', err);
       window.orlyAssets = new Map();
       const msg = errorDetail(err);
-      showPlaceholder('Asset loading failed', msg, 'error');
-      if (jscoqOk) showStatus(`Failed to load assets: ${msg}`, 'error');
+      captureErrorReport({
+        source: 'asset-loading',
+        title: 'Asset loading failed',
+        status: jscoqOk ? `Failed to load assets: ${msg}` : '',
+        error: err,
+      });
     }
 
     // ── game canvas sizing ───────────────────────────────────────
@@ -909,8 +1246,12 @@
       } catch (err) {
         console.error('BSP render init failed:', err);
         const msg = errorDetail(err);
-        showStatus(`Render error: ${msg}`, 'error');
-        showPlaceholder('Render startup failed', msg, 'error');
+        captureErrorReport({
+          source: 'render-startup',
+          title: 'Render startup failed',
+          status: `Render error: ${msg}`,
+          error: err,
+        });
       }
     }
     // ── direction-aware drag-to-resize ───────────────────────────

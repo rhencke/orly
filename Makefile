@@ -1,4 +1,4 @@
-.PHONY: build test clean serve assets rocq-build ocaml-build validate-build validate browser-theories jscoq-runtime
+.PHONY: build test clean serve assets stage-pages-map rocq-build ocaml-build validate-build validate browser-theories jscoq-runtime
 
 # Path to the Q3 Arena Demo installer or pak0.pk3.
 # Set on the command line: make assets DEMO=/path/to/Q3ADemo.exe
@@ -36,6 +36,11 @@ DOCS_THEORIES_DIR = docs/theories
 BSP_CORE_SRCS     = theories/BspBinary.v theories/BspEntity.v theories/GameState.v
 BSP_CORE_V        = $(DOCS_THEORIES_DIR)/BspCore.v
 JSCOQ_VENDOR_DIR  = docs/vendor/jscoq
+ASSETS_DIR        = docs/assets
+PAGES_MAP_SRC     = docs/vendor/maps/openarena/am_lavaarena.bsp
+PAGES_MAP_PATH    = maps/am_lavaarena.bsp
+PAGES_MAP_DEST    = $(ASSETS_DIR)/$(PAGES_MAP_PATH)
+PAGES_MANIFEST    = $(ASSETS_DIR)/manifest.json
 
 $(BSP_CORE_V): $(BSP_CORE_SRCS)
 	mkdir -p $(DOCS_THEORIES_DIR)
@@ -88,7 +93,13 @@ assets: ocaml-build
 	  printf '\nSee README.md and ASSETS.md for details.\n'; \
 	  exit 1; \
 	}
-	$(EXTRACT_BIN) --output docs/assets "$(DEMO)"
+	$(EXTRACT_BIN) --output $(ASSETS_DIR) "$(DEMO)"
+
+# Stage the GPL-licensed OpenArena BSP that GitHub Pages is allowed to ship.
+stage-pages-map:
+	mkdir -p "$(dir $(PAGES_MAP_DEST))"
+	cp "$(PAGES_MAP_SRC)" "$(PAGES_MAP_DEST)"
+	printf '[\n  "%s"\n]\n' "$(PAGES_MAP_PATH)" > "$(PAGES_MANIFEST)"
 
 serve: jscoq-runtime
 	@test -d docs/assets || { \

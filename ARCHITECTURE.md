@@ -35,7 +35,7 @@ is genuinely powered by Rocq/JsCoq, not only by JavaScript.
 ### Game state
 
 All authoritative game state lives in Rocq: player position, orientation,
-velocity, and any entity or trigger state needed for the v1 demo level.
+velocity, and any entity or trigger state needed for the v1 gameplay map.
 JavaScript never independently tracks or modifies game state — it reads
 snapshots produced by Rocq for rendering.
 
@@ -94,7 +94,8 @@ decides **how** to draw it.
 HTTP fetches (`fetch()`), response handling, and delivery of raw byte
 arrays to Rocq are JavaScript's job.  Rocq does not initiate network
 requests.  JavaScript fetches BSP files, texture data, and any other
-assets, then passes the raw bytes into Rocq for parsing.
+assets — whether from the staged OpenArena Pages map or a local q3dm1
+extraction — then passes the raw bytes into Rocq for parsing.
 
 ### Frame timing
 

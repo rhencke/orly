@@ -476,7 +476,7 @@
         <div id="game-placeholder" data-state="loading" aria-live="polite">
           <span class="label" data-placeholder-role="title">Loading browser shell…</span>
           <span class="detail" data-placeholder-role="detail">
-            Booting JsCoq and checking whether q3dm1 assets are available.
+            Booting JsCoq and checking whether a playable BSP is available.
           </span>
         </div>
     </div>
@@ -565,13 +565,13 @@
     // then retrieves each as an ArrayBuffer using parallel fetches.
     //
     // Returns a Map<string, ArrayBuffer> keyed by relative asset path
-    // (e.g. "maps/q3dm1.bsp").  The renderer (issue #15) reads from
+    // (e.g. "maps/am_lavaarena.bsp").  The renderer (issue #15) reads from
     // window.orlyAssets at draw time.
     //
     // Graceful degradation: a missing manifest (HTTP 404) just means the
-    // assets have not been extracted yet — normal on GitHub Pages (EULA
-    // prohibits hosting extracted files) and in fresh checkouts.  The
-    // function returns an empty Map without surfacing a user-visible error.
+    // staged licensed map or local q3dm1 assets are not present yet —
+    // normal in fresh checkouts and local previews.  The function returns
+    // an empty Map without surfacing a user-visible error.
     async function loadAssets() {
       let manifest;
       try {
@@ -608,6 +608,18 @@
     // Serve the JsCoq runtime from docs/vendor/jscoq so every startup
     // fetch (module, worker, images, quick-help, packages) stays same-origin.
     const JSCOQ_ROOT = new URL('./vendor/jscoq/', window.location.href);
+    const PREFERRED_BSP_PATHS = [
+      'maps/am_lavaarena.bsp',
+      'maps/q3dm1.bsp',
+    ];
+
+    function describeMapPath(path) {
+      return path.replace(/^maps\//, '').replace(/\.bsp$/i, '');
+    }
+
+    function pickDemoMapPath(assets) {
+      return PREFERRED_BSP_PATHS.find(path => assets.has(path)) ?? null;
+    }
 
     // ── BSP game theory loader ───────────────────────────────────
     //
@@ -645,7 +657,7 @@
     let rocqBridge = null;
     showPlaceholder(
       'Loading JsCoq and game theories…',
-      'Fetching the Rocq runtime and the browser-side q3dm1 theory bundle.'
+      'Fetching the Rocq runtime and the browser-side game theory bundle.'
     );
     showStatus('Loading JsCoq and game theories…');
     try {
@@ -695,12 +707,14 @@
     // it with asset progress.
     try {
       window.orlyAssets = await loadAssets();
+      const selectedMapPath = pickDemoMapPath(window.orlyAssets);
+      window.orlySelectedMapPath = selectedMapPath;
       if (window.orlyAssets.size > 0)
         console.log(`orly: loaded ${window.orlyAssets.size} game assets`);
-      if (jscoqOk && window.orlyAssets.size === 0) {
+      if (jscoqOk && !selectedMapPath) {
         showPlaceholder(
-          'q3dm1 assets not found',
-          'Run make assets DEMO=/path/to/pak0.pk3, then reload to render the demo level.',
+          'No playable BSP found',
+          'Run make stage-pages-map for the licensed OpenArena map, or make assets DEMO=/path/to/pak0.pk3 for q3dm1.',
           'idle'
         );
       }
@@ -741,11 +755,16 @@
     // ── BSP parse + render pipeline ──────────────────────────────
     // If the BSP file was loaded, parse it and start the renderer.
     // The placeholder is hidden once WebGL is up and drawing.
-    const bspBuffer = window.orlyAssets.get('maps/q3dm1.bsp');
+    const selectedMapPath = window.orlySelectedMapPath;
+    const selectedMapLabel = selectedMapPath ? describeMapPath(selectedMapPath) : 'demo map';
+    const bspBuffer = selectedMapPath ? window.orlyAssets.get(selectedMapPath) : null;
     if (bspBuffer) {
       try {
         showStatus('Parsing BSP…');
-        showPlaceholder('Parsing q3dm1 BSP…', 'Decoding level geometry and lightmaps.');
+        showPlaceholder(
+          `Parsing ${selectedMapLabel} BSP…`,
+          'Decoding level geometry and lightmaps.'
+        );
         const bsp = parseBsp(bspBuffer);
         console.log(`orly: parsed BSP — ${bsp.faces.length} faces, ` +
                     `${bsp.vertices.length} vertices, ` +
@@ -771,14 +790,17 @@
         });
 
         showStatus('Loading shaders…');
-        showPlaceholder('Loading shaders…', 'Mapping q3dm1 materials to browser textures.');
+        showPlaceholder(
+          'Loading shaders…',
+          `Mapping ${selectedMapLabel} materials to browser textures.`
+        );
         const shaderDefs = await loadShadersFromAssets(window.orlyAssets);
         console.log(`orly: loaded ${shaderDefs.size} shader definitions`);
 
         showStatus('Initializing renderer…');
         showPlaceholder(
           'Initializing renderer…',
-          'Preparing the first WebGL frame for q3dm1.'
+          `Preparing the first WebGL frame for ${selectedMapLabel}.`
         );
         const renderer = createRenderer(canvas, bsp, {
           shaderDefs,

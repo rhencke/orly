@@ -33,8 +33,17 @@ jobs:
       - name: Vendor JsCoq runtime
         run: npm run --silent vendor:jscoq
 
-      - name: Assert Pages artifact excludes extracted demo assets
-        run: test ! -d docs/assets
+      - name: Stage licensed Pages map
+        run: |
+          rm -rf docs/assets
+          make stage-pages-map
+
+      - name: Verify licensed Pages map artifact
+        run: |
+          test -f docs/assets/manifest.json
+          test -f docs/assets/maps/am_lavaarena.bsp
+          grep -Fx '  "maps/am_lavaarena.bsp"' docs/assets/manifest.json
+          test ! -e docs/assets/maps/q3dm1.bsp
 
       - name: Upload Pages artifact
         if: github.event_name != 'pull_request'

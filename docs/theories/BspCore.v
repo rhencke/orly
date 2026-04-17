@@ -437,12 +437,33 @@ Definition key_origin : list Z :=
 Definition key_angle : list Z :=
   [97; 110; 103; 108; 101].
 
+(** ASCII encoding of "model". *)
+Definition key_model : list Z :=
+  [109; 111; 100; 101; 108].
+
+(** ASCII encoding of "target". *)
+Definition key_target : list Z :=
+  [116; 97; 114; 103; 101; 116].
+
+(** ASCII encoding of "targetname". *)
+Definition key_targetname : list Z :=
+  [116; 97; 114; 103; 101; 116; 110; 97; 109; 101].
+
+(** ASCII encoding of "trigger_push". *)
+Definition val_trigger_push : list Z :=
+  [116; 114; 105; 103; 103; 101; 114; 95; 112; 117; 115; 104].
+
+(** ASCII encoding of "target_position". *)
+Definition val_target_position : list Z :=
+  [116; 97; 114; 103; 101; 116; 95; 112; 111; 115; 105; 116; 105; 111; 110].
+
 (* ------------------------------------------------------------------ *)
 (** ** Integer value parser                                             *)
 (* ------------------------------------------------------------------ *)
 
 Definition ascii_minus : Z := 45.   (** '-' *)
 Definition ascii_space : Z := 32.   (** ' ' *)
+Definition ascii_star  : Z := 42.   (** '*' *)
 
 (** True iff [c] is an ASCII decimal digit. *)
 Definition is_digit (c : Z) : bool := (48 <=? c) && (c <=? 57).
@@ -484,6 +505,22 @@ Definition parse_int (cs : list Z) : option (Z * list Z) :=
            then let (n, tail) := scan_digits cs 0 (length cs) in
                 Some (n, tail)
            else None
+  end.
+
+(** Parse an inline BSP submodel reference of the form ["*N"].
+    Returns [Some N] iff the string begins with ['*'], the remainder
+    parses as a decimal integer, the parse consumes the full string,
+    and [N] is non-negative. *)
+Definition parse_inline_model_ref (cs : list Z) : option Z :=
+  match cs with
+  | c :: rest =>
+      if c =? ascii_star then
+        match parse_int rest with
+        | Some (n, []) => if n <? 0 then None else Some n
+        | _            => None
+        end
+      else None
+  | [] => None
   end.
 
 (* ------------------------------------------------------------------ *)
@@ -528,6 +565,21 @@ Proof. vm_compute. reflexivity. Qed.
 
 (** Negative integer. *)
 Lemma parse_int_neg_1 : parse_int [45; 49] = Some (-1, []).
+Proof. vm_compute. reflexivity. Qed.
+
+(** A well-formed inline model reference parses successfully. *)
+Lemma parse_inline_model_ref_pos :
+  parse_inline_model_ref [42; 49; 50] = Some 12.
+Proof. vm_compute. reflexivity. Qed.
+
+(** Negative inline model references are rejected. *)
+Lemma parse_inline_model_ref_neg :
+  parse_inline_model_ref [42; 45; 49] = None.
+Proof. vm_compute. reflexivity. Qed.
+
+(** Missing the leading ['*'] is not a valid inline model reference. *)
+Lemma parse_inline_model_ref_missing_star :
+  parse_inline_model_ref [49; 50] = None.
 Proof. vm_compute. reflexivity. Qed.
 (** * Game-state and render-snapshot types for the Rocq game core.
 
@@ -935,16 +987,20 @@ Definition parse_origin_vec3 (cs : list Z) : option vec3 :=
               | _ => None
               end
           end
-      | _ => None
-      end
+       | _ => None
+       end
+   end.
+
+(** True iff entity [e] has the given classname. *)
+Definition entity_classname_eqb (e : bsp_entity) (classname : list Z) : bool :=
+  match entity_get_val e key_classname with
+  | Some v => list_Z_eqb v classname
+  | None   => false
   end.
 
 (** True iff entity [e] has classname [info_player_deathmatch]. *)
 Definition is_spawn_entity (e : bsp_entity) : bool :=
-  match entity_get_val e key_classname with
-  | Some v => list_Z_eqb v val_info_player_deathmatch
-  | None   => false
-  end.
+  entity_classname_eqb e val_info_player_deathmatch.
 
 (** Extract the world-space origin from a spawn entity.
     Returns [None] if no [origin] key is present or the value is
@@ -966,6 +1022,74 @@ Definition spawn_yaw_of_entity (e : bsp_entity) : Q :=
       end
   | None => 0
   end.
+
+(* ------------------------------------------------------------------ *)
+(** ** Trigger metadata extraction from entity data                     *)
+(* ------------------------------------------------------------------ *)
+
+Record trigger_push_metadata : Type := mk_trigger_push_metadata
+  { tpm_model_index : Z
+  ; tpm_target_name : list Z
+  }.
+
+Record target_position_metadata : Type := mk_target_position_metadata
+  { tpos_target_name : list Z
+  ; tpos_origin      : vec3
+  }.
+
+(** True iff entity [e] has classname [trigger_push]. *)
+Definition is_trigger_push_entity (e : bsp_entity) : bool :=
+  entity_classname_eqb e val_trigger_push.
+
+(** True iff entity [e] has classname [target_position]. *)
+Definition is_target_position_entity (e : bsp_entity) : bool :=
+  entity_classname_eqb e val_target_position.
+
+(** Extract the inline BSP submodel index from an entity's [model] key. *)
+Definition entity_model_index (e : bsp_entity) : option Z :=
+  match entity_get_val e key_model with
+  | Some v => parse_inline_model_ref v
+  | None   => None
+  end.
+
+(** Extract the target name an entity points at via its [target] key. *)
+Definition entity_target_name (e : bsp_entity) : option (list Z) :=
+  entity_get_val e key_target.
+
+(** Extract the name by which another entity can target this one. *)
+Definition entity_targetname (e : bsp_entity) : option (list Z) :=
+  entity_get_val e key_targetname.
+
+(** Extract a [target_position] origin from entity data. *)
+Definition target_position_origin_of_entity (e : bsp_entity) : option vec3 :=
+  match entity_get_val e key_origin with
+  | Some v => parse_origin_vec3 v
+  | None   => None
+  end.
+
+(** Parse the metadata v1 needs from a [trigger_push] entity.
+    The trigger must carry both an inline [model] reference and a
+    [target] name so later world-building code can resolve it. *)
+Definition parse_trigger_push_metadata (e : bsp_entity)
+    : option trigger_push_metadata :=
+  if is_trigger_push_entity e then
+    match entity_model_index e, entity_target_name e with
+    | Some model_index, Some target_name =>
+        Some (mk_trigger_push_metadata model_index target_name)
+    | _, _ => None
+    end
+  else None.
+
+(** Parse the metadata v1 needs from a [target_position] entity. *)
+Definition parse_target_position_metadata (e : bsp_entity)
+    : option target_position_metadata :=
+  if is_target_position_entity e then
+    match entity_targetname e, target_position_origin_of_entity e with
+    | Some target_name, Some origin =>
+        Some (mk_target_position_metadata target_name origin)
+    | _, _ => None
+    end
+  else None.
 
 (** [select_spawn_point entities] returns the position and yaw of the
     first [info_player_deathmatch] entity that has a parseable [origin].
@@ -1174,6 +1298,33 @@ Proof. vm_compute. reflexivity. Qed.
 Lemma parse_origin_neg_example :
   parse_origin_vec3 [45; 52; 56; 32; 49; 50; 56; 32; 45; 56] =
     Some (mk_vec3 (inject_Z (-48)) (inject_Z 128) (inject_Z (-8))).
+Proof. vm_compute. reflexivity. Qed.
+
+Lemma parse_trigger_push_metadata_example :
+  parse_trigger_push_metadata
+    [ (key_classname, val_trigger_push)
+    ; (key_model, [42; 51])
+    ; (key_target, [112; 97; 100; 49])
+    ] =
+  Some (mk_trigger_push_metadata 3 [112; 97; 100; 49]).
+Proof. vm_compute. reflexivity. Qed.
+
+Lemma parse_trigger_push_metadata_requires_target :
+  parse_trigger_push_metadata
+    [ (key_classname, val_trigger_push)
+    ; (key_model, [42; 51])
+    ] = None.
+Proof. vm_compute. reflexivity. Qed.
+
+Lemma parse_target_position_metadata_example :
+  parse_target_position_metadata
+    [ (key_classname, val_target_position)
+    ; (key_targetname, [112; 97; 100; 49])
+    ; (key_origin, [49; 50; 56; 32; 48; 32; 50; 53; 54])
+    ] =
+  Some (mk_target_position_metadata
+          [112; 97; 100; 49]
+          (mk_vec3 128 0 256)).
 Proof. vm_compute. reflexivity. Qed.
 
 (** An empty entity list has no spawn points. *)

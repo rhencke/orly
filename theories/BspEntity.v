@@ -265,12 +265,33 @@ Definition key_origin : list Z :=
 Definition key_angle : list Z :=
   [97; 110; 103; 108; 101].
 
+(** ASCII encoding of "model". *)
+Definition key_model : list Z :=
+  [109; 111; 100; 101; 108].
+
+(** ASCII encoding of "target". *)
+Definition key_target : list Z :=
+  [116; 97; 114; 103; 101; 116].
+
+(** ASCII encoding of "targetname". *)
+Definition key_targetname : list Z :=
+  [116; 97; 114; 103; 101; 116; 110; 97; 109; 101].
+
+(** ASCII encoding of "trigger_push". *)
+Definition val_trigger_push : list Z :=
+  [116; 114; 105; 103; 103; 101; 114; 95; 112; 117; 115; 104].
+
+(** ASCII encoding of "target_position". *)
+Definition val_target_position : list Z :=
+  [116; 97; 114; 103; 101; 116; 95; 112; 111; 115; 105; 116; 105; 111; 110].
+
 (* ------------------------------------------------------------------ *)
 (** ** Integer value parser                                             *)
 (* ------------------------------------------------------------------ *)
 
 Definition ascii_minus : Z := 45.   (** '-' *)
 Definition ascii_space : Z := 32.   (** ' ' *)
+Definition ascii_star  : Z := 42.   (** '*' *)
 
 (** True iff [c] is an ASCII decimal digit. *)
 Definition is_digit (c : Z) : bool := (48 <=? c) && (c <=? 57).
@@ -312,6 +333,22 @@ Definition parse_int (cs : list Z) : option (Z * list Z) :=
            then let (n, tail) := scan_digits cs 0 (length cs) in
                 Some (n, tail)
            else None
+  end.
+
+(** Parse an inline BSP submodel reference of the form ["*N"].
+    Returns [Some N] iff the string begins with ['*'], the remainder
+    parses as a decimal integer, the parse consumes the full string,
+    and [N] is non-negative. *)
+Definition parse_inline_model_ref (cs : list Z) : option Z :=
+  match cs with
+  | c :: rest =>
+      if c =? ascii_star then
+        match parse_int rest with
+        | Some (n, []) => if n <? 0 then None else Some n
+        | _            => None
+        end
+      else None
+  | [] => None
   end.
 
 (* ------------------------------------------------------------------ *)
@@ -356,4 +393,19 @@ Proof. vm_compute. reflexivity. Qed.
 
 (** Negative integer. *)
 Lemma parse_int_neg_1 : parse_int [45; 49] = Some (-1, []).
+Proof. vm_compute. reflexivity. Qed.
+
+(** A well-formed inline model reference parses successfully. *)
+Lemma parse_inline_model_ref_pos :
+  parse_inline_model_ref [42; 49; 50] = Some 12.
+Proof. vm_compute. reflexivity. Qed.
+
+(** Negative inline model references are rejected. *)
+Lemma parse_inline_model_ref_neg :
+  parse_inline_model_ref [42; 45; 49] = None.
+Proof. vm_compute. reflexivity. Qed.
+
+(** Missing the leading ['*'] is not a valid inline model reference. *)
+Lemma parse_inline_model_ref_missing_star :
+  parse_inline_model_ref [49; 50] = None.
 Proof. vm_compute. reflexivity. Qed.

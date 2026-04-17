@@ -14,6 +14,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the Rocq/JavaScript boundary and
 
 - **Rocq + OCaml** via [opam](https://opam.ocaml.org/): `opam install rocq-prover decompress`
   (OCaml 5.3 recommended; matches the CI image)
+- **Node.js + npm** for the browser runtime: `npm ci`
 - Your own copy of the **Quake 3 Arena Demo v1.11** installer or `pak0.pk3`
   (see [ASSETS.md](ASSETS.md) for sources and redistribution constraints)
 
@@ -64,9 +65,12 @@ make serve
 ```
 
 Opens a local HTTP server at <http://localhost:8080> (requires Python 3 for the
-dev server).  The game shell is at `docs/index.html`.  Assets must be extracted
-first (step 1); if `docs/assets/` is missing, `make serve` warns but still
-starts the server so you can work on the shell without assets.
+dev server).  On each run, `make serve` refreshes `docs/vendor/jscoq/` from the
+locked npm dependency tree so the browser shell uses a reproducible JsCoq
+runtime without committing the generated files.  The game shell is at
+`docs/index.html`.  Assets must be extracted first (step 1); if `docs/assets/`
+is missing, `make serve` warns but still starts the server so you can work on
+the shell without assets.
 
 ### Browser regression smoke test
 
@@ -74,7 +78,7 @@ To run the Playwright regression coverage for browser load and q3dm1 render
 startup:
 
 ```sh
-npm install
+npm ci
 npm run playwright:install
 npm run test:q3dm1-browser
 ```

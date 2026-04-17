@@ -511,38 +511,9 @@
     }
 
     // ── JsCoq bootstrap ─────────────────────────────────────────
-    // Loaded from jsDelivr CDN. Uses dynamic import so we can catch
-    // network failures and surface them in the status bar instead of
-    // silently failing (a static import failure kills the whole module).
-    const JSCOQ_CDN = 'https://cdn.jsdelivr.net/npm/jscoq@0.17.1/';
-    const JSCOQ_WORKER_PATCH = Symbol('orly.jscoqWorkerPatch');
-
-    // Chromium rejects cross-origin classic workers even when the script
-    // itself is CORS-fetchable. Keep JsCoq's packages on the CDN, but swap
-    // its worker entrypoint for a same-origin blob wrapper that importScripts()
-    // the real jscoq worker from jsDelivr.
-    function installJsCoqWorkerBootstrap(CoqWorker, basePath) {
-      if (CoqWorker[JSCOQ_WORKER_PATCH]) return;
-
-      const workerUrl = new URL('backend/jsoo/jscoq_worker.bc.js', basePath).href;
-      const bootstrapUrl = URL.createObjectURL(new Blob([
-        `importScripts(${JSON.stringify(workerUrl)});\n`,
-      ], { type: 'text/javascript' }));
-      const startWorker = CoqWorker.prototype.newWorkerWithProgress;
-
-      CoqWorker.prototype.newWorkerWithProgress = function(url, preload) {
-        const resolved = url instanceof URL
-          ? url.href
-          : new URL(String(url), window.location.href).href;
-        return startWorker.call(
-          this,
-          resolved === workerUrl ? bootstrapUrl : url,
-          preload
-        );
-      };
-
-      CoqWorker[JSCOQ_WORKER_PATCH] = true;
-    }
+    // Serve the JsCoq runtime from docs/vendor/jscoq so every startup
+    // fetch (module, worker, images, quick-help, packages) stays same-origin.
+    const JSCOQ_ROOT = new URL('./vendor/jscoq/', window.location.href);
 
     // ── BSP game theory loader ───────────────────────────────────
     //
@@ -582,11 +553,10 @@
     try {
       // Fetch the JsCoq module and the game theory file in parallel —
       // neither depends on the other, so there's no reason to wait.
-      const [{ JsCoq, CoqWorker }, theoryText] = await Promise.all([
-        import('https://cdn.jsdelivr.net/npm/jscoq@0.17.1/jscoq.js'),
+      const [{ JsCoq }, theoryText] = await Promise.all([
+        import(new URL('jscoq.js', JSCOQ_ROOT).href),
         loadBspTheory(),
       ]);
-      installJsCoqWorkerBootstrap(CoqWorker, JSCOQ_CDN);
 
       // Populate the textarea BEFORE JsCoq.start() so the Rocq kernel
       // sees the real game theory text when it initialises the editor.
@@ -597,7 +567,7 @@
 
       showStatus('Starting Rocq kernel…');
       const coq = await JsCoq.start(
-        JSCOQ_CDN,
+        JSCOQ_ROOT.href,
         ['.coq-code'],
         {
           prelude:       true,

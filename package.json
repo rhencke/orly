@@ -4,12 +4,14 @@
   "private": true,
   "description": "Playwright utilities for browser-side orly debugging.",
   "scripts": {
+    "vendor:jscoq": "node scripts/vendor-jscoq.mjs",
     "playwright:install": "playwright install chromium",
     "test:q3dm1-browser": "node scripts/repro-q3dm1-render.mjs",
     "repro:q3dm1-render": "node scripts/repro-q3dm1-render.mjs"
   },
   "license": "MIT",
   "devDependencies": {
+    "jscoq": "^0.17.1",
     "playwright": "^1.52.0"
   }
 }

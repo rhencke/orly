@@ -1,4 +1,4 @@
-.PHONY: build test clean serve assets rocq-build ocaml-build validate-build validate browser-theories
+.PHONY: build test clean serve assets rocq-build ocaml-build validate-build validate browser-theories jscoq-runtime
 
 # Path to the Q3 Arena Demo installer or pak0.pk3.
 # Set on the command line: make assets DEMO=/path/to/Q3ADemo.exe
@@ -35,6 +35,7 @@ THEORIES := \
 DOCS_THEORIES_DIR = docs/theories
 BSP_CORE_SRCS     = theories/BspBinary.v theories/BspEntity.v theories/GameState.v
 BSP_CORE_V        = $(DOCS_THEORIES_DIR)/BspCore.v
+JSCOQ_VENDOR_DIR  = docs/vendor/jscoq
 
 $(BSP_CORE_V): $(BSP_CORE_SRCS)
 	mkdir -p $(DOCS_THEORIES_DIR)
@@ -42,6 +43,14 @@ $(BSP_CORE_V): $(BSP_CORE_SRCS)
 	  | grep -v '^From Bsp Require Import' > $@
 
 browser-theories: $(BSP_CORE_V)
+
+jscoq-runtime: package.json package-lock.json scripts/vendor-jscoq.mjs
+	@test -d node_modules/jscoq || { \
+	  printf 'error: node_modules/jscoq not found.\n'; \
+	  printf 'Run: npm ci\n'; \
+	  exit 1; \
+	}
+	npm run --silent vendor:jscoq
 
 rocq-build:
 	$(foreach v,$(THEORIES),rocq compile -Q theories Bsp $(v) &&) true
@@ -64,6 +73,7 @@ clean:
 	rm -f extract_assets/extract_assets_core.ml extract_assets/extract_assets_core.mli
 	rm -f validate_bsp/bsp_core.ml validate_bsp/bsp_core.mli
 	rm -f $(BSP_CORE_V)
+	rm -rf $(JSCOQ_VENDOR_DIR)
 	dune clean
 
 assets: ocaml-build
@@ -80,7 +90,7 @@ assets: ocaml-build
 	}
 	$(EXTRACT_BIN) --output docs/assets "$(DEMO)"
 
-serve:
+serve: jscoq-runtime
 	@test -d docs/assets || { \
 	  printf 'warning: docs/assets/ not found — game assets will not load.\n'; \
 	  printf 'Run: make assets DEMO=/path/to/installer-or-pak0.pk3\n'; \

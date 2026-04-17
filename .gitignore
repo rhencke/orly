@@ -67,3 +67,6 @@ extract_assets/*.o
 
 # extracted demo assets — EULA prohibits committing or redistributing individually
 docs/assets/
+
+# generated browser runtime copied from locked npm dependencies
+docs/vendor/

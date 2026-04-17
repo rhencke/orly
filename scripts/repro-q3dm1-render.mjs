@@ -133,6 +133,8 @@ async function gatherSnapshot(page) {
   return page.evaluate(() => {
     const statusBar = document.getElementById('status-bar');
     const placeholder = document.getElementById('game-placeholder');
+    const placeholderTitle = placeholder?.querySelector('[data-placeholder-role="title"]');
+    const placeholderDetail = placeholder?.querySelector('[data-placeholder-role="detail"]');
     const canvas = document.getElementById('game-canvas');
     const assetMap = window.orlyAssets instanceof Map ? window.orlyAssets : null;
 
@@ -144,7 +146,14 @@ async function gatherSnapshot(page) {
             className: statusBar.className,
           }
         : null,
-      placeholderHidden: placeholder?.hidden ?? null,
+      placeholder: placeholder
+        ? {
+            hidden: placeholder.hidden,
+            state: placeholder.dataset.state ?? '',
+            title: placeholderTitle?.textContent?.trim() ?? '',
+            detail: placeholderDetail?.textContent?.trim() ?? '',
+          }
+        : null,
       canvas: canvas
         ? {
             width: canvas.width,
@@ -244,8 +253,20 @@ function assertNoAssetsScenario(snapshot, consoleEvents) {
   if (snapshot.assetCount !== 0) {
     throw new Error(`expected no assets, got ${snapshot.assetCount}`);
   }
-  if (snapshot.placeholderHidden !== false) {
+  if (snapshot.placeholder?.hidden !== false) {
     throw new Error('placeholder should stay visible when q3dm1 assets are absent');
+  }
+  if (snapshot.placeholder?.state !== 'idle') {
+    throw new Error(`expected idle placeholder state, got ${snapshot.placeholder?.state ?? '(missing)'}`);
+  }
+  if (snapshot.placeholder?.title !== 'q3dm1 assets not found') {
+    throw new Error(`unexpected no-assets placeholder title: ${snapshot.placeholder?.title ?? '(missing)'}`);
+  }
+  if (!snapshot.placeholder?.detail.includes('make assets DEMO=')) {
+    throw new Error(`unexpected no-assets placeholder detail: ${snapshot.placeholder?.detail ?? '(missing)'}`);
+  }
+  if (!snapshot.canvas || snapshot.canvas.width <= 0 || snapshot.canvas.height <= 0) {
+    throw new Error('game canvas never reached a drawable size in the no-assets scenario');
   }
 }
 
@@ -263,8 +284,11 @@ function assertRenderStartupScenario(snapshot, consoleEvents) {
   if (snapshot.assetCount !== 1) {
     throw new Error(`expected one stubbed q3dm1 asset, got ${snapshot.assetCount}`);
   }
-  if (snapshot.placeholderHidden !== true) {
+  if (snapshot.placeholder?.hidden !== true) {
     throw new Error('placeholder never hid after q3dm1 render startup');
+  }
+  if (snapshot.placeholder?.state !== 'ready') {
+    throw new Error(`expected ready placeholder state after render, got ${snapshot.placeholder?.state ?? '(missing)'}`);
   }
   if (!snapshot.canvas || snapshot.canvas.width <= 0 || snapshot.canvas.height <= 0) {
     throw new Error('game canvas never reached a drawable size');
@@ -300,7 +324,7 @@ async function runScenario(browser, scenarioName, outDir, port) {
       consoleEvents,
       scenarioName === 'browser-load-no-assets'
         ? current => current.jscoqLoaded && current.status?.hidden === true
-        : current => current.placeholderHidden === true
+        : current => current.placeholder?.hidden === true
     );
 
     const screenshotPath = path.join(outDir, `${scenarioName}.png`);

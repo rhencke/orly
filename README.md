@@ -1,14 +1,14 @@
 # Orly
 
-A formally verified Quake 3 Arena demo level, playable in the browser.
+A formally verified Quake 3-compatible BSP experience, playable in the browser.
 The game logic runs in [Rocq](https://rocq-prover.org/) (formerly Coq),
 interpreted live by [JsCoq](https://github.com/jscoq/jscoq) so you can
 read and step through the proofs on the same page as the running game.
 
-Because the Quake 3 demo license does not permit publishing extracted map
-assets on GitHub Pages, the public site ships the browser shell and Rocq
-theories only.  To actually play q3dm1, extract your own demo assets locally
-with `make assets`, then serve the repo yourself.
+The public site ships the browser shell, Rocq theories, and a compatibly
+licensed OpenArena BSP by default.  Local q3dm1 support is still available
+through `make assets`, but the Quake 3 demo license does not permit publishing
+the extracted q3dm1 assets themselves on GitHub Pages.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the Rocq/JavaScript boundary and
 [V1_CHECKLIST.md](V1_CHECKLIST.md) for the v1 acceptance target.
@@ -20,8 +20,9 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the Rocq/JavaScript boundary and
 - **Rocq + OCaml** via [opam](https://opam.ocaml.org/): `opam install rocq-prover decompress`
   (OCaml 5.3 recommended; matches the CI image)
 - **Node.js + npm** for the browser runtime: `npm ci`
-- Your own copy of the **Quake 3 Arena Demo v1.11** installer or `pak0.pk3`
-  (see [ASSETS.md](ASSETS.md) for sources and redistribution constraints)
+- **Optional for local q3dm1 work:** your own copy of the **Quake 3 Arena Demo
+  v1.11** installer or `pak0.pk3` (see [ASSETS.md](ASSETS.md) for sources and
+  redistribution constraints)
 
 > **Tip:** To match CI exactly without a local opam setup, run everything
 > inside Docker:
@@ -31,7 +32,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the Rocq/JavaScript boundary and
 >   "cp -r /src /tmp/work && cd /tmp/work && opam exec -- make assets DEMO=/src/pak0.pk3"
 > ```
 
-### 1. Extract game assets
+### 1. Optional: extract q3dm1 demo assets
 
 Run `make assets`, pointing `DEMO` at your installer or at a bare `pak0.pk3`:
 
@@ -73,9 +74,10 @@ Opens a local HTTP server at <http://localhost:8080> (requires Python 3 for the
 dev server).  On each run, `make serve` refreshes `docs/vendor/jscoq/` from the
 locked npm dependency tree so the browser shell uses a reproducible JsCoq
 runtime without committing the generated files.  The game shell is at
-`docs/index.html`.  Assets must be extracted first (step 1); if `docs/assets/`
-is missing, `make serve` warns but still starts the server so you can work on
-the shell without assets.
+`docs/index.html`.  For the shipped licensed map, run `make stage-pages-map`
+before serving locally.  q3dm1 demo assets from step 1 remain optional; if
+`docs/assets/` is missing, `make serve` warns but still starts the server so you
+can work on the shell without local map assets.
 
 ### Browser regression smoke test
 
@@ -92,8 +94,9 @@ The regression script runs four scenarios against the local browser build:
 
 1. the assetless page load path, to ensure the JsCoq worker bootstrap still
    succeeds without tripping over browser security restrictions
-2. a desktop startup path using the vendored `maps/am_lavaarena.bsp`, to ensure
-   the Rocq-seeded render pipeline reaches its first frame and hides the placeholder
+2. a desktop startup path using a staged `maps/am_lavaarena.bsp` licensed-map
+   asset, to ensure the Rocq-seeded render pipeline reaches its first frame and
+   hides the placeholder
 3. an iPhone-sized portrait startup path, to ensure the mobile controls stay
    visible, large enough to use, and safely inside the viewport
 4. an iPhone-sized landscape startup path, to ensure the split layout, control

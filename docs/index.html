@@ -569,9 +569,9 @@
     // window.orlyAssets at draw time.
     //
     // Graceful degradation: a missing manifest (HTTP 404) just means the
-    // assets have not been extracted yet — normal on GitHub Pages (EULA
-    // prohibits hosting extracted files) and in fresh checkouts.  The
-    // function returns an empty Map without surfacing a user-visible error.
+    // staged licensed map or local q3dm1 assets are not present yet —
+    // normal in fresh checkouts and local previews.  The function returns
+    // an empty Map without surfacing a user-visible error.
     async function loadAssets() {
       let manifest;
       try {

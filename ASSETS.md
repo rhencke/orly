@@ -1,10 +1,10 @@
 # Demo asset provenance and redistribution constraints
 
-This document records the origin of the demo assets used by Orly's v1 level
-(q3dm1 — "Arena Gate"), the legal constraints that govern their use, and the
-exact files that must be extracted from the demo distribution to run the level.
-It exists so that future builds and GitHub Pages deploys do not accidentally
-become policy violations.
+This document records the origin of the optional local q3dm1 demo assets, the
+legal constraints that govern their use, and the exact files that must be
+extracted from the demo distribution to run that map locally.  It exists so
+that future builds and GitHub Pages deploys do not accidentally become policy
+violations while the public site ships a separate compatibly licensed map.
 
 ## Source distribution
 
@@ -60,19 +60,19 @@ Additional relevant prohibitions:
 - **Commercial use** — Section 2(f) prohibits commercial exploitation in any
   medium.
 
-**Consequence for GitHub Pages deploys:** The demo assets must **not** be
+**Consequence for GitHub Pages deploys:** The q3dm1 demo assets must **not** be
 committed to this repository or to the `docs/` build output that Pages serves.
 Any build or CI step that would publish extracted asset files to Pages would
 constitute redistribution of individual extracted files and/or public display,
 both of which the EULA prohibits.  The public Pages deployment may still host
-the HTML/CSS/JS/Rocq shell itself, but it must treat q3dm1 asset loading as a
-local, user-supplied step rather than shipping a publicly playable copy of the
-map.
+the HTML/CSS/JS/Rocq shell and a separately licensed map, but it must treat
+q3dm1 asset loading as a local, user-supplied step rather than shipping a
+publicly playable copy of the demo map.
 
 ### Approved approach for local development and CI
 
-Users must supply their own copy of the demo distribution.  A future
-`make assets` (or equivalent) target will:
+Users who want q3dm1 locally must supply their own copy of the demo
+distribution.  The `make assets` target:
 
 1. Accept a path to the user-supplied demo installer or `pak0.pk3`.
 2. Extract only the required files (see manifest below) into a
@@ -81,9 +81,10 @@ Users must supply their own copy of the demo distribution.  A future
 
 The extracted files must never be committed, pushed, or deployed.
 
-In practice this means the public site can only demonstrate the shell, theory
-loading, and "bring your own demo assets" flow.  Any actually playable q3dm1
-session has to come from a local build fed by the user's own demo package.
+In practice this means the public site can ship the shell plus a compatibly
+licensed map, while q3dm1 remains a "bring your own demo assets" local flow.
+Any q3dm1 session has to come from a local build fed by the user's own demo
+package.
 
 ## Required file manifest
 

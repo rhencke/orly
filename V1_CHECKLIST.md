@@ -1,4 +1,4 @@
-# V1 feature checklist: demo-level playability
+# V1 feature checklist: browser playability
 
 This document defines the exact acceptance target for
 [issue #12](https://github.com/rhencke/orly/issues/12).  Everything on this
@@ -8,10 +8,13 @@ or out of scope entirely.  The Rocq/JS boundary that governs which items
 belong in Rocq versus JavaScript is defined in
 [ARCHITECTURE.md](ARCHITECTURE.md).
 
-## Chosen level: q3dm1 — Arena Gate
+## Reference gameplay map: q3dm1 — Arena Gate
 
-The v1 demo level is **q3dm1** ("Arena Gate", also known as "The Place of
-Many Deaths").  Reasons:
+The main gameplay/proof target for v1 is still **q3dm1** ("Arena Gate", also
+known as "The Place of Many Deaths").  The public GitHub Pages rollout now
+ships a separately licensed OpenArena BSP by default, while q3dm1 remains the
+documented local "bring your own demo assets" path.  Reasons to keep q3dm1 as
+the reference gameplay map:
 
 - Small footprint — a tight multi-level arena with corridors, ramps, and open
   platforms.  Enough geometry to exercise collision and rendering without the
@@ -20,9 +23,10 @@ Many Deaths").  Reasons:
   minimum gameplay logic tractable for a first port.
 - Immediately recognizable — anyone who has touched Quake 3 knows this room,
   which makes the "it runs" moment legible to an outside observer.
-- Freely available in the Quake 3 Arena demo distribution under id Software's
-  demo license; asset packaging is tracked separately in
-  [issue #14](https://github.com/rhencke/orly/issues/14).
+- Already matched to the current parser, entity, and collision scope; the
+  public-map rollout does not change the underlying v1 gameplay target.
+- q3dm1 asset packaging and local extraction constraints are tracked separately
+  in [issue #14](https://github.com/rhencke/orly/issues/14).
 
 ## q3dm1 entity scope for issue #26
 
@@ -63,15 +67,18 @@ investigation proves one is unexpectedly required for the acceptance path:
       on Android) without errors.
 - [ ] JsCoq boots, the Rocq kernel starts, and the IDE panel shows the
       game-core theories loading.
-- [ ] The public GitHub Pages shell handles the no-assets path cleanly:
-      q3dm1 content is absent by default, but the page stays usable and tells
-      the user how to provide demo assets locally.
+- [ ] The public GitHub Pages shell ships a playable, compatibly licensed BSP
+      by default and reaches first render without requiring user-supplied
+      assets.
+- [ ] A fresh local checkout still handles the no-assets path cleanly: if
+      `docs/assets/` is absent, the page stays usable and tells the user how
+      to stage the licensed map or provide q3dm1 demo assets locally.
 - [ ] The BSP and texture assets for q3dm1 load reproducibly from a
       user-supplied Quake 3 Arena Demo package via the documented `make assets`
       flow — no manual file-copy steps, no ad hoc paths.
 - [ ] A local reproduction works by following the repo docs alone
-      (`make assets` + `make serve` or equivalent) on both desktop and mobile
-      via local network.
+      (`make stage-pages-map` + `make serve` for the shipped map, `make assets`
+      + `make serve` for q3dm1) on both desktop and mobile via local network.
 
 ### Spawn
 

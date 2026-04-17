@@ -520,14 +520,106 @@
       return value == null ? '' : String(value);
     }
 
+    function firstNonEmptyText(...values) {
+      for (const value of values) {
+        const text = textOrEmpty(value).trim();
+        if (text.length > 0) return text;
+      }
+      return '';
+    }
+
+    function stringifyErrorValue(value) {
+      if (value == null) return '';
+      if (typeof value === 'string') return value;
+      if (value instanceof Error) {
+        return firstNonEmptyText(value.stack, value.message, value.name);
+      }
+      try {
+        const seen = new WeakSet();
+        const json = JSON.stringify(
+          value,
+          (_key, current) => {
+            if (typeof current === 'bigint') return current.toString();
+            if (current instanceof Error) {
+              return {
+                name: current.name,
+                message: current.message,
+                stack: current.stack ?? '',
+              };
+            }
+            if (typeof current !== 'object' || current === null) return current;
+            if (seen.has(current)) return '[Circular]';
+            seen.add(current);
+            return current;
+          },
+          2
+        );
+        if (typeof json === 'string' && json.length > 0) return json;
+      } catch {}
+      return textOrEmpty(value);
+    }
+
+    function errorLocation(value) {
+      const url = firstNonEmptyText(value?.filename, value?.sourceURL);
+      const line = Number.isInteger(value?.lineno) ? value.lineno : null;
+      const column = Number.isInteger(value?.colno) ? value.colno : null;
+      if (!url && line === null && column === null) return null;
+      return { url, line, column };
+    }
+
+    function normalizeErrorReport(value, fallback = 'Unknown error') {
+      const errorValue = value?.error ?? value?.reason ?? value;
+      const message = firstNonEmptyText(
+        value?.message,
+        errorValue?.message,
+        typeof errorValue === 'string' ? errorValue : '',
+        stringifyErrorValue(errorValue),
+        stringifyErrorValue(value),
+        fallback
+      );
+      const stack = firstNonEmptyText(errorValue?.stack, value?.stack);
+      const name = firstNonEmptyText(errorValue?.name, value?.name);
+      const raw = firstNonEmptyText(
+        stringifyErrorValue(errorValue),
+        stringifyErrorValue(value)
+      );
+      return {
+        message,
+        stack,
+        name,
+        raw,
+        location: errorLocation(value),
+      };
+    }
+
     function errorDetail(value, fallback = 'Unknown error') {
-      if (typeof value?.message === 'string' && value.message.length > 0) {
-        return value.message;
+      return normalizeErrorReport(value, fallback).message;
+    }
+
+    function clearErrorReport() {
+      window.orlyErrorReport = null;
+    }
+
+    function captureErrorReport({
+      source,
+      title,
+      status,
+      error,
+      fallback = 'Unknown error',
+    }) {
+      const report = {
+        source: textOrEmpty(source),
+        title: textOrEmpty(title),
+        status: textOrEmpty(status),
+        capturedAt: new Date().toISOString(),
+        ...normalizeErrorReport(error, fallback),
+      };
+      window.orlyErrorReport = report;
+      if (report.status.length > 0) {
+        showStatus(report.status, 'error');
       }
-      if (typeof value === 'string' && value.length > 0) {
-        return value;
-      }
-      return fallback;
+      showPlaceholder(report.title, report.message, 'error');
+      return report;
     }
 
     function showPlaceholder(title, detail = '', state = 'loading') {
@@ -538,11 +630,13 @@
       placeholderTitle.textContent = safeTitle;
       placeholderDetail.textContent = safeDetail;
       placeholderDetail.hidden = safeDetail.length === 0;
+      if (state !== 'error') clearErrorReport();
     }
 
     function hidePlaceholder() {
       gamePlaceholder.hidden = true;
       gamePlaceholder.dataset.state = 'ready';
+      clearErrorReport();
     }
 
     function showStatus(msg, type = 'loading') {
@@ -557,6 +651,8 @@
       statusBar.textContent = '';
     }
 
+    clearErrorReport();
+
     const GAME_TICK_MS = 16;
     const MAX_FRAME_DT_MS = 100;
     const MAX_SIMULATION_STEPS = 6;
@@ -566,13 +662,21 @@
     // JsCoq internal errors that bubble up as uncaught exceptions.
     window.addEventListener('error', (e) => {
       const msg = errorDetail(e);
-      showStatus(`Error: ${msg}`, 'error');
-      showPlaceholder('Browser startup failed', msg, 'error');
+      captureErrorReport({
+        source: 'window-error',
+        title: 'Browser startup failed',
+        status: `Error: ${msg}`,
+        error: e,
+      });
     });
     window.addEventListener('unhandledrejection', (e) => {
       const msg = errorDetail(e.reason);
-      showStatus(`Error: ${msg}`, 'error');
-      showPlaceholder('Browser startup failed', msg, 'error');
+      captureErrorReport({
+        source: 'unhandled-rejection',
+        title: 'Browser startup failed',
+        status: `Error: ${msg}`,
+        error: e,
+      });
     });
 
     // ── asset loader ─────────────────────────────────────────────
@@ -712,8 +816,12 @@
       jscoqOk = true;
     } catch (err) {
       const msg = errorDetail(err);
-      showStatus(`Failed to load JsCoq: ${msg}`, 'error');
-      showPlaceholder('JsCoq startup failed', msg, 'error');
+      captureErrorReport({
+        source: 'jscoq-bootstrap',
+        title: 'JsCoq startup failed',
+        status: `Failed to load JsCoq: ${msg}`,
+        error: err,
+      });
       console.error('JsCoq bootstrap failed:', err);
     }
 
@@ -741,8 +849,12 @@
       console.error('Asset loading failed:', err);
       window.orlyAssets = new Map();
       const msg = errorDetail(err);
-      showPlaceholder('Asset loading failed', msg, 'error');
-      if (jscoqOk) showStatus(`Failed to load assets: ${msg}`, 'error');
+      captureErrorReport({
+        source: 'asset-loading',
+        title: 'Asset loading failed',
+        status: jscoqOk ? `Failed to load assets: ${msg}` : '',
+        error: err,
+      });
     }
 
     // ── game canvas sizing ───────────────────────────────────────
@@ -909,8 +1021,12 @@
       } catch (err) {
         console.error('BSP render init failed:', err);
         const msg = errorDetail(err);
-        showStatus(`Render error: ${msg}`, 'error');
-        showPlaceholder('Render startup failed', msg, 'error');
+        captureErrorReport({
+          source: 'render-startup',
+          title: 'Render startup failed',
+          status: `Render error: ${msg}`,
+          error: err,
+        });
       }
     }
     // ── direction-aware drag-to-resize ───────────────────────────

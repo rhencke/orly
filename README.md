@@ -68,6 +68,20 @@ dev server).  The game shell is at `docs/index.html`.  Assets must be extracted
 first (step 1); if `docs/assets/` is missing, `make serve` warns but still
 starts the server so you can work on the shell without assets.
 
+### Browser render repro
+
+To reproduce the current q3dm1 in-browser render failure with Playwright:
+
+```sh
+npm install
+npm run playwright:install
+npm run repro:q3dm1-render
+```
+
+The repro script opens the local browser build, captures console/network
+diagnostics plus a screenshot, and prints the artifact paths it wrote under
+your system temp directory.
+
 ### Build and test
 
 ```sh

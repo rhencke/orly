@@ -448,6 +448,17 @@
                     `${bsp.vertices.length} vertices, ` +
                     `${bsp.lightmaps.length} lightmaps`);
 
+        if (!rocqBridge) {
+          throw new Error('Rocq bridge is unavailable');
+        }
+
+        showStatus('Syncing Rocq render state…');
+        const initialSnapshot = await rocqBridge.load_world({
+          entities: bsp.entities,
+          faces: bsp.faces,
+          textures: bsp.textures,
+        });
+
         showStatus('Loading shaders…');
         const shaderDefs = await loadShadersFromAssets(window.orlyAssets);
         console.log(`orly: loaded ${shaderDefs.size} shader definitions`);
@@ -457,14 +468,8 @@
           shaderDefs,
           assets: window.orlyAssets,
           assetBasePath: 'assets/',
+          visibleFaces: initialSnapshot.visibleFaces,
         });
-
-        if (!rocqBridge) {
-          throw new Error('Rocq bridge is unavailable');
-        }
-
-        showStatus('Syncing Rocq camera state…');
-        const initialSnapshot = await rocqBridge.load_world(bsp.entities);
 
         // Hide the placeholder — WebGL is live
         document.getElementById('game-placeholder').hidden = true;
@@ -485,7 +490,7 @@
         requestAnimationFrame(frame);
 
         clearStatus();
-        console.log('orly: render pipeline active — camera seeded from Rocq state');
+        console.log('orly: render pipeline active — snapshot seeded from Rocq state');
       } catch (err) {
         console.error('BSP render init failed:', err);
         showStatus(`Render error: ${err.message}`, 'error');

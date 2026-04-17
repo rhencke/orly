@@ -2,7 +2,7 @@ import { mat4LookAt } from './renderer.js';
 
 const DEG_TO_RAD = Math.PI / 180;
 const BRIDGE_VERSION = 1;
-const CAMERA_WORDS_DEFINITION = 'Definition initial_camera_words_from_entities';
+const BRIDGE_HELPERS_DEFINITION = 'Definition initial_visible_faces_from_inputs';
 const CAMERA_WORDS_COUNT = 10;
 
 function nextTick() {
@@ -33,18 +33,40 @@ function formatEntities(entities) {
   return `[${entities.map(formatEntity).join('; ')}]`;
 }
 
+function formatTexture(texture) {
+  return `(mk_render_texture_input ${formatZList(encodeAsciiBytes(texture.name))} ` +
+    `${texture.flags} ${texture.contents})`;
+}
+
+function formatTextures(textures) {
+  return `[${textures.map(formatTexture).join('; ')}]`;
+}
+
+function formatFace(face) {
+  return `(mk_render_face_input ${face.texture} ${face.type} ${face.nVertexes} ` +
+    `${face.nMeshverts} ${face.sizeX} ${face.sizeY})`;
+}
+
+function formatFaces(faces) {
+  return `[${faces.map(formatFace).join('; ')}]`;
+}
+
 function flattenMessages(manager, messages) {
   return messages
     .map(({ msg }) => manager.pprint.pp2Text(msg))
     .join('\n');
 }
 
-function parseCameraWords(text) {
+function parseZList(text) {
   const match = text.match(/=\s*\[([^\]]*)\]/s);
   if (!match) {
-    throw new Error(`unexpected Rocq camera payload: ${text}`);
+    throw new Error(`unexpected Rocq list payload: ${text}`);
   }
-  const words = (match[1].match(/-?\d+/g) || []).map(Number);
+  return (match[1].match(/-?\d+/g) || []).map(Number);
+}
+
+function parseCameraWords(text) {
+  const words = parseZList(text);
   if (words.length !== CAMERA_WORDS_COUNT) {
     throw new Error(`expected ${CAMERA_WORDS_COUNT} camera words, got ${words.length}`);
   }
@@ -92,6 +114,7 @@ function cloneSnapshot(snapshot) {
     position: { ...snapshot.position },
     yaw: snapshot.yaw,
     pitch: snapshot.pitch,
+    visibleFaces: [...snapshot.visibleFaces],
     viewMatrix: new Float32Array(snapshot.viewMatrix),
   };
 }
@@ -103,18 +126,18 @@ async function waitForSentenceSid(sentence) {
   return sentence.coq_sid;
 }
 
-async function ensureCameraWordsReady(manager) {
+async function ensureBridgeHelpersReady(manager) {
   await manager.when_ready.promise;
 
   let sentence = manager.doc.sentences.find(stm =>
-    stm.coq_sid && stm.text.includes(CAMERA_WORDS_DEFINITION));
+    stm.coq_sid && stm.text.includes(BRIDGE_HELPERS_DEFINITION));
   if (sentence) return sentence.coq_sid;
 
   while (manager.goNext(false)) {
     sentence = manager.doc.sentences[manager.doc.sentences.length - 1];
     const sid = await waitForSentenceSid(sentence);
     await manager.coq.sids[sid].promise;
-    if (sentence.text.includes(CAMERA_WORDS_DEFINITION)) {
+    if (sentence.text.includes(BRIDGE_HELPERS_DEFINITION)) {
       return sid;
     }
   }
@@ -122,31 +145,44 @@ async function ensureCameraWordsReady(manager) {
   throw new Error('Rocq bridge helper definitions were not found in the loaded theory');
 }
 
-async function evalCameraWords(manager, sid, entities) {
+async function evalCameraWords(manager, sid, world) {
   const command =
-    `Eval cbv in (initial_camera_words_from_entities ${formatEntities(entities)}).`;
+    `Eval cbv in (initial_camera_words_from_inputs ` +
+    `${formatEntities(world.entities)} ${formatFaces(world.faces)} ${formatTextures(world.textures)}).`;
   const messages = await manager.coq.queryPromise(sid, ['Vernac', command]);
   return parseCameraWords(flattenMessages(manager, messages));
 }
 
+async function evalVisibleFaces(manager, sid, world) {
+  const command =
+    `Eval cbv in (initial_visible_faces_from_inputs ` +
+    `${formatEntities(world.entities)} ${formatFaces(world.faces)} ${formatTextures(world.textures)}).`;
+  const messages = await manager.coq.queryPromise(sid, ['Vernac', command]);
+  return parseZList(flattenMessages(manager, messages));
+}
+
 export function createRocqBridge(manager) {
-  let cameraWordsSidPromise = null;
+  let bridgeHelpersSidPromise = null;
   let initialSnapshot = null;
 
-  function getCameraWordsSid() {
-    cameraWordsSidPromise ||= ensureCameraWordsReady(manager);
-    return cameraWordsSidPromise;
+  function getBridgeHelpersSid() {
+    bridgeHelpersSidPromise ||= ensureBridgeHelpersReady(manager);
+    return bridgeHelpersSidPromise;
   }
 
   return {
     version: BRIDGE_VERSION,
 
-    async load_world(entities) {
-      const sid = await getCameraWordsSid();
-      const words = await evalCameraWords(manager, sid, entities);
+    async load_world(world) {
+      const sid = await getBridgeHelpersSid();
+      const [words, visibleFaces] = await Promise.all([
+        evalCameraWords(manager, sid, world),
+        evalVisibleFaces(manager, sid, world),
+      ]);
       const camera = cameraSnapshotFromWords(words);
       initialSnapshot = {
         ...camera,
+        visibleFaces,
         viewMatrix: buildViewMatrix(camera),
       };
       return cloneSnapshot(initialSnapshot);

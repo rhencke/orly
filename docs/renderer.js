@@ -14,9 +14,9 @@
 // Coordinate system: Q3 is right-handed Z-up. We pass vertices
 // through unmodified — the view matrix handles the conversion.
 
-import { FACE_POLYGON, FACE_MESH, isVisibleTexture } from './bsp.js';
+import { FACE_POLYGON, FACE_MESH } from './bsp.js';
 import { tessellatePatches } from './patches.js';
-import { loadShadersFromAssets, getTextureFromShader } from './shaders.js';
+import { getTextureFromShader } from './shaders.js';
 
 // ── shader sources ───────────────────────────────────────────────────
 
@@ -98,14 +98,6 @@ function linkProgram(gl, vs, fs) {
   return p;
 }
 
-// ── surface filtering ────────────────────────────────────────────────
-
-function shouldDrawFace(face, textures) {
-  if (face.type !== FACE_POLYGON && face.type !== FACE_MESH) return false;
-  if (face.nMeshverts === 0) return false;
-  return isVisibleTexture(textures[face.texture]);
-}
-
 // ── vertex buffer packing ────────────────────────────────────────────
 //
 // Interleaved layout per vertex (32 bytes):
@@ -150,34 +142,42 @@ function buildVertexBuffer(gl, vertices) {
 // Group faces by lightmap index so we can batch draw calls.
 // Returns { ibo, groups: [{ lmIndex, start, count }], indexType, indexSize }.
 
-function buildIndexBuffer(gl, bsp, patchGroupMap, totalVertexCount) {
-  const { faces, meshVerts, textures } = bsp;
+function buildIndexBuffer(gl, bsp, patchGroupMap, totalVertexCount, visibleFaces) {
+  const { faces, meshVerts } = bsp;
 
   // First pass: count total indices and group by lightmap
-  const groupMap = new Map(); // lmIndex -> [indices...]
-  for (let fi = 0; fi < faces.length; fi++) {
+  const groupMap = new Map(); // lmIndex -> { indices, faceIndices }
+  for (const fi of visibleFaces) {
     const face = faces[fi];
-    if (!shouldDrawFace(face, textures)) continue;
+    if (!face) continue;
+    if (face.type !== FACE_POLYGON && face.type !== FACE_MESH) continue;
+    if (face.nMeshverts === 0) continue;
 
     const lmIdx = face.lmIndex;
-    if (!groupMap.has(lmIdx)) groupMap.set(lmIdx, []);
-    const arr = groupMap.get(lmIdx);
+    if (!groupMap.has(lmIdx)) {
+      groupMap.set(lmIdx, { indices: [], faceIndices: [] });
+    }
+    const group = groupMap.get(lmIdx);
+    group.faceIndices.push(fi);
 
     for (let j = 0; j < face.nMeshverts; j++) {
-      arr.push(face.vertex + meshVerts[face.meshvert + j]);
+      group.indices.push(face.vertex + meshVerts[face.meshvert + j]);
     }
   }
 
   // Merge tessellated bezier patch indices into the same lightmap groups
-  for (const [lmIdx, patchIndices] of patchGroupMap) {
-    if (!groupMap.has(lmIdx)) groupMap.set(lmIdx, []);
-    const arr = groupMap.get(lmIdx);
-    for (const idx of patchIndices) arr.push(idx);
+  for (const [lmIdx, patchGroup] of patchGroupMap) {
+    if (!groupMap.has(lmIdx)) {
+      groupMap.set(lmIdx, { indices: [], faceIndices: [] });
+    }
+    const group = groupMap.get(lmIdx);
+    for (const idx of patchGroup.indices) group.indices.push(idx);
+    for (const fi of patchGroup.faceIndices) group.faceIndices.push(fi);
   }
 
   // Flatten groups into a single index array, recording start/count
   let totalIndices = 0;
-  for (const arr of groupMap.values()) totalIndices += arr.length;
+  for (const group of groupMap.values()) totalIndices += group.indices.length;
 
   // Choose index type based on total vertex count (BSP + tessellated patches)
   const needU32 = totalVertexCount > 65535;
@@ -194,12 +194,17 @@ function buildIndexBuffer(gl, bsp, patchGroupMap, totalVertexCount) {
 
   const groups = [];
   let offset = 0;
-  for (const [lmIdx, arr] of groupMap) {
-    groups.push({ lmIndex: lmIdx, start: offset, count: arr.length });
-    for (let i = 0; i < arr.length; i++) {
-      indexData[offset + i] = arr[i];
+  for (const [lmIdx, group] of groupMap) {
+    groups.push({
+      lmIndex: lmIdx,
+      start: offset,
+      count: group.indices.length,
+      faceIndices: group.faceIndices,
+    });
+    for (let i = 0; i < group.indices.length; i++) {
+      indexData[offset + i] = group.indices[i];
     }
-    offset += arr.length;
+    offset += group.indices.length;
   }
 
   const ibo = gl.createBuffer();
@@ -370,7 +375,7 @@ export function mat4LookAt(out, eye, center, up) {
  *
  * @param {HTMLCanvasElement} canvas — the target canvas
  * @param {object} bsp — parsed BSP data from parseBsp()
- * @param {object} options — { shaderDefs, assets, assetBasePath }
+ * @param {object} options — { shaderDefs, assets, assetBasePath, visibleFaces }
  * @returns {{ render(view: Float32Array, proj: Float32Array): void, destroy(): void }}
  */
 export function createRenderer(canvas, bsp, options = {}) {
@@ -396,13 +401,15 @@ export function createRenderer(canvas, bsp, options = {}) {
   const uHasDiffuse = gl.getUniformLocation(program, 'u_hasDiffuse');
 
   // ── tessellate bezier patches ───────────────────────────────────
-  const patches = tessellatePatches(bsp);
+  const visibleFaces = options.visibleFaces ?? bsp.faces.map((_, fi) => fi);
+  const visibleFaceSet = new Set(visibleFaces);
+  const patches = tessellatePatches(bsp, visibleFaceSet);
   const allVertices = bsp.vertices.concat(patches.vertices);
 
   // ── build GPU buffers ────────────────────────────────────────────
   const vbo = buildVertexBuffer(gl, allVertices);
   const { ibo, groups, indexType, indexSize } =
-    buildIndexBuffer(gl, bsp, patches.groupMap, allVertices.length);
+    buildIndexBuffer(gl, bsp, patches.groupMap, allVertices.length, visibleFaces);
   const lm = uploadLightmaps(gl, bsp);
 
   // ── diffuse textures ────────────────────────────────────────────

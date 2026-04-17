@@ -1,9 +1,9 @@
 // ── Bezier patch tessellation for Q3 BSP type-2 faces ────────────
 //
-// SUPERSEDED: the authoritative tessellation logic now lives in Rocq
-// (theories/BspPatch.v) with proofs.  This JS file remains as a
-// temporary fallback until the JS-to-Rocq bridge is wired up,
-// at which point JS will consume pre-tessellated meshes from Rocq.
+// The authoritative patch geometry logic now lives in Rocq
+// (theories/BspPatch.v) with proofs.  The browser still performs the
+// WebGL-side tessellation step here, but only for the patch faces that
+// Rocq includes in the render snapshot.
 //
 // Q3 BSP patch faces store a grid of control points for bi-quadratic
 // Bezier surfaces (3x3 control points per sub-patch).  This module
@@ -14,7 +14,7 @@
 //   import { tessellatePatches } from './patches.js';
 //   const { vertices, groupMap } = tessellatePatches(bsp);
 
-import { FACE_PATCH, isVisibleTexture } from './bsp.js';
+import { FACE_PATCH } from './bsp.js';
 
 // ── config ──────────────────────────────────────────────────────────
 
@@ -113,15 +113,16 @@ function tessellateSingle(ctrl, level) {
 // The caller must pass vertexBase = bsp.vertices.length so that
 // returned indices are offset correctly for the combined buffer.
 
-export function tessellatePatches(bsp, level = TESS_LEVEL) {
+export function tessellatePatches(bsp, visibleFaceSet = null, level = TESS_LEVEL) {
   const vertexBase = bsp.vertices.length;
   const vertices = [];
   const groupMap = new Map();
 
-  for (const face of bsp.faces) {
+  for (let fi = 0; fi < bsp.faces.length; fi++) {
+    const face = bsp.faces[fi];
     if (face.type !== FACE_PATCH) continue;
+    if (visibleFaceSet && !visibleFaceSet.has(fi)) continue;
     if (face.nVertexes === 0) continue;
-    if (!isVisibleTexture(bsp.textures[face.texture])) continue;
 
     const gw = face.sizeX;
     const gh = face.sizeY;
@@ -132,8 +133,11 @@ export function tessellatePatches(bsp, level = TESS_LEVEL) {
     const numPatchesY = (gh - 1) / 2;
 
     const lmIdx = face.lmIndex;
-    if (!groupMap.has(lmIdx)) groupMap.set(lmIdx, []);
-    const groupIndices = groupMap.get(lmIdx);
+    if (!groupMap.has(lmIdx)) {
+      groupMap.set(lmIdx, { indices: [], faceIndices: [] });
+    }
+    const group = groupMap.get(lmIdx);
+    group.faceIndices.push(fi);
 
     for (let py = 0; py < numPatchesY; py++) {
       for (let px = 0; px < numPatchesX; px++) {
@@ -149,7 +153,7 @@ export function tessellatePatches(bsp, level = TESS_LEVEL) {
         const patch = tessellateSingle(ctrl, level);
 
         for (const v of patch.vertices) vertices.push(v);
-        for (const idx of patch.indices) groupIndices.push(base + idx);
+        for (const idx of patch.indices) group.indices.push(base + idx);
       }
     }
   }

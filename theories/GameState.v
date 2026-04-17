@@ -26,6 +26,7 @@
 From Stdlib Require Import List.
 From Stdlib Require Import ZArith.
 From Stdlib Require Import QArith.
+From Stdlib Require Import Lia.
 From Bsp Require Import BspEntity.
 Import ListNotations.
 Open Scope Z_scope.
@@ -82,6 +83,95 @@ Record entity_state : Type := mk_entity_state
   }.
 
 (* ------------------------------------------------------------------ *)
+(** ** Render metadata input (JS -> Rocq, at world load)               *)
+(* ------------------------------------------------------------------ *)
+
+(** Minimal texture metadata the JS shell sends into Rocq so the
+    authoritative render snapshot can decide which faces are drawable. *)
+Record render_texture_input : Type := mk_render_texture_input
+  { rti_name     : list Z
+  ; rti_flags    : Z
+  ; rti_contents : Z
+  }.
+
+(** Minimal face metadata Rocq needs to decide whether a face belongs in
+    the render snapshot. *)
+Record render_face_input : Type := mk_render_face_input
+  { rfi_texture     : Z
+  ; rfi_type        : Z
+  ; rfi_n_vertexes  : Z
+  ; rfi_n_meshverts : Z
+  ; rfi_size_x      : Z
+  ; rfi_size_y      : Z
+  }.
+
+Definition face_type_polygon : Z := 1.
+Definition face_type_patch   : Z := 2.
+Definition face_type_mesh    : Z := 3.
+
+Definition contents_playerclip : Z := 65536.
+Definition contents_monsterclip : Z := 131072.
+Definition surf_nodraw : Z := 128.
+Definition surf_sky : Z := 4.
+
+Definition val_noshader : list Z :=
+  [110; 111; 115; 104; 97; 100; 101; 114].
+
+Definition bit_setb (bits mask : Z) : bool :=
+  negb (Z.land bits mask =? 0).
+
+Definition texture_visibleb (tx : render_texture_input) : bool :=
+  if list_Z_eqb (rti_name tx) [] then false else
+  if list_Z_eqb (rti_name tx) val_noshader then false else
+  if (bit_setb (rti_flags tx) surf_nodraw ||
+      bit_setb (rti_flags tx) surf_sky)%bool then false else
+  if (bit_setb (rti_contents tx) contents_playerclip ||
+      bit_setb (rti_contents tx) contents_monsterclip)%bool then false else
+  true.
+
+Definition valid_patch_gridb (f : render_face_input) : bool :=
+  negb ((rfi_size_x f <? 3) ||
+        (rfi_size_y f <? 3) ||
+        Z.even (rfi_size_x f) ||
+        Z.even (rfi_size_y f)).
+
+Definition nth_z {A : Type} (ls : list A) (i : Z) : option A :=
+  if i <? 0 then None else nth_error ls (Z.to_nat i).
+
+Definition renderable_faceb
+    (textures : list render_texture_input) (f : render_face_input) : bool :=
+  match nth_z textures (rfi_texture f) with
+  | None => false
+  | Some tx =>
+      if texture_visibleb tx then
+        match rfi_type f with
+        | 1 => negb (rfi_n_meshverts f =? 0)
+        | 2 => negb (rfi_n_vertexes f =? 0) && valid_patch_gridb f
+        | 3 => negb (rfi_n_meshverts f =? 0)
+        | _ => false
+        end
+      else false
+  end.
+
+Fixpoint visible_face_indices_aux
+    (faces : list render_face_input)
+    (textures : list render_texture_input)
+    (idx : Z) : list Z :=
+  match faces with
+  | [] => []
+  | f :: rest =>
+      let rest_indices := visible_face_indices_aux rest textures (idx + 1) in
+      if renderable_faceb textures f
+      then idx :: rest_indices
+      else rest_indices
+  end.
+
+Definition visible_face_indices
+    (faces : list render_face_input)
+    (textures : list render_texture_input) : list Z :=
+  visible_face_indices_aux faces textures 0.
+
+(* ------------------------------------------------------------------ *)
 (** ** Game state (Rocq-owned, authoritative)                          *)
 (* ------------------------------------------------------------------ *)
 
@@ -136,6 +226,15 @@ Definition extract_snapshot (gs : game_state) : render_snapshot :=
     (gs_yaw gs)
     (gs_pitch gs)
     []                (* visible faces — PVS/culling not yet implemented *)
+    (map (fun es => (es_entity_index es, es_origin es)) (gs_entities gs)).
+
+Definition extract_snapshot_with_visible_faces
+    (gs : game_state) (visible_faces : list Z) : render_snapshot :=
+  mk_render_snapshot
+    (gs_position gs)
+    (gs_yaw gs)
+    (gs_pitch gs)
+    visible_faces
     (map (fun es => (es_entity_index es, es_origin es)) (gs_entities gs)).
 
 (** Serialize a rational as numerator/denominator [Z] words so the
@@ -218,6 +317,16 @@ Proof.
   intros rs. unfold render_snapshot_camera_words, q_words.
   simpl. reflexivity.
 Qed.
+
+Lemma extract_snapshot_with_visible_faces_camera_pos : forall gs visible_faces,
+  rs_camera_pos (extract_snapshot_with_visible_faces gs visible_faces) =
+  gs_position gs.
+Proof. reflexivity. Qed.
+
+Lemma extract_snapshot_with_visible_faces_visible_faces : forall gs visible_faces,
+  rs_visible_faces (extract_snapshot_with_visible_faces gs visible_faces) =
+  visible_faces.
+Proof. reflexivity. Qed.
 
 (* ------------------------------------------------------------------ *)
 (** ** Spawn-point extraction from entity data                          *)
@@ -310,6 +419,31 @@ Definition initial_camera_words_from_entities (entities : list bsp_entity)
   render_snapshot_camera_words
     (extract_snapshot (game_state_from_entities entities)).
 
+Definition initial_render_snapshot_from_inputs
+    (entities : list bsp_entity)
+    (faces : list render_face_input)
+    (textures : list render_texture_input)
+    : render_snapshot :=
+  extract_snapshot_with_visible_faces
+    (game_state_from_entities entities)
+    (visible_face_indices faces textures).
+
+Definition initial_camera_words_from_inputs
+    (entities : list bsp_entity)
+    (faces : list render_face_input)
+    (textures : list render_texture_input)
+    : list Z :=
+  render_snapshot_camera_words
+    (initial_render_snapshot_from_inputs entities faces textures).
+
+Definition initial_visible_faces_from_inputs
+    (entities : list bsp_entity)
+    (faces : list render_face_input)
+    (textures : list render_texture_input)
+    : list Z :=
+  rs_visible_faces
+    (initial_render_snapshot_from_inputs entities faces textures).
+
 (* ------------------------------------------------------------------ *)
 (** ** Correctness lemmas for spawn-point selection                     *)
 (* ------------------------------------------------------------------ *)
@@ -370,4 +504,62 @@ Lemma initial_camera_words_from_entities_length : forall entities,
 Proof.
   intros entities. unfold initial_camera_words_from_entities.
   apply render_snapshot_camera_words_length.
+Qed.
+
+Lemma texture_visibleb_empty :
+  texture_visibleb (mk_render_texture_input [] 0 0) = false.
+Proof. reflexivity. Qed.
+
+Lemma texture_visibleb_noshader :
+  texture_visibleb (mk_render_texture_input val_noshader 0 0) = false.
+Proof. reflexivity. Qed.
+
+Lemma valid_patch_gridb_even_width : forall tex nv nm h,
+  valid_patch_gridb (mk_render_face_input tex face_type_patch nv nm 4 h) = false.
+Proof.
+  intros. unfold valid_patch_gridb. simpl.
+  destruct (h <? 3); reflexivity.
+Qed.
+
+Lemma visible_face_indices_aux_length_le : forall faces textures start,
+  (length (visible_face_indices_aux faces textures start) <= length faces)%nat.
+Proof.
+  induction faces as [| f rest IH]; intros textures start; simpl.
+  - lia.
+  - destruct (renderable_faceb textures f); simpl.
+    + apply le_n_S. exact (IH textures (start + 1)).
+    + apply le_S. exact (IH textures (start + 1)).
+Qed.
+
+Lemma visible_face_indices_length_le : forall faces textures,
+  (length (visible_face_indices faces textures) <= length faces)%nat.
+Proof.
+  intros faces textures. unfold visible_face_indices.
+  apply visible_face_indices_aux_length_le.
+Qed.
+
+Lemma visible_face_indices_aux_bounds :
+  forall faces textures start i,
+    In i (visible_face_indices_aux faces textures start) ->
+    start <= i < start + Z.of_nat (length faces).
+Proof.
+  induction faces as [| f rest IH]; intros textures start i Hin; simpl in *.
+  - contradiction.
+  - destruct (renderable_faceb textures f) eqn:Hrender.
+    + simpl in Hin. destruct Hin as [-> | Hin].
+      * simpl. lia.
+      * specialize (IH textures (start + 1) i Hin). simpl in IH. lia.
+    + specialize (IH textures (start + 1) i Hin). simpl in IH. lia.
+Qed.
+
+Lemma initial_visible_faces_from_inputs_in_bounds :
+  forall entities faces textures i,
+    In i (initial_visible_faces_from_inputs entities faces textures) ->
+    0 <= i < Z.of_nat (length faces).
+Proof.
+  intros entities faces textures i Hin.
+  unfold initial_visible_faces_from_inputs, initial_render_snapshot_from_inputs.
+  simpl in Hin.
+  apply (visible_face_indices_aux_bounds faces textures 0 i) in Hin.
+  simpl in Hin. lia.
 Qed.

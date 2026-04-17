@@ -68,19 +68,25 @@ dev server).  The game shell is at `docs/index.html`.  Assets must be extracted
 first (step 1); if `docs/assets/` is missing, `make serve` warns but still
 starts the server so you can work on the shell without assets.
 
-### Browser render repro
+### Browser regression smoke test
 
-To reproduce the current q3dm1 in-browser render failure with Playwright:
+To run the Playwright regression coverage for browser load and q3dm1 render
+startup:
 
 ```sh
 npm install
 npm run playwright:install
-npm run repro:q3dm1-render
+npm run test:q3dm1-browser
 ```
 
-The repro script opens the local browser build, captures console/network
-diagnostics plus a screenshot, and prints the artifact paths it wrote under
-your system temp directory.
+The smoke test runs two scenarios against the local browser build:
+
+1. the assetless page load path, to ensure the JsCoq worker bootstrap still
+   succeeds without tripping over browser security restrictions
+2. a stubbed `maps/q3dm1.bsp` startup path, to ensure the Rocq-seeded render
+   pipeline reaches its first frame and hides the placeholder
+
+It writes screenshots plus JSON diagnostics under your system temp directory.
 
 ### Build and test
 

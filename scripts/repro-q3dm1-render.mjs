@@ -6,10 +6,58 @@ import { spawn } from 'node:child_process';
 import { chromium } from 'playwright';
 
 const ROOT = process.cwd();
-const PORT = Number.parseInt(process.env.ORLY_REPRO_PORT ?? '8080', 10);
-const URL = `http://127.0.0.1:${PORT}/`;
+const DOCS_DIR = path.join(ROOT, 'docs');
+const PORT_BASE = Number.parseInt(process.env.ORLY_REPRO_PORT ?? '18080', 10);
 const TIMEOUT_MS = Number.parseInt(process.env.ORLY_REPRO_TIMEOUT_MS ?? '20000', 10);
 const POLL_MS = 500;
+const BSP_MAGIC = 0x49425350;
+const BSP_VERSION = 46;
+const NUM_LUMPS = 17;
+const HEADER_SIZE = 8 + NUM_LUMPS * 8;
+const BOOTSTRAP_FAILURE_RE =
+  /launch failure SecurityError|Failed to construct 'Worker'|JsCoq bootstrap failed/i;
+const RENDER_FAILURE_RE = /BSP render init failed|Render error:/i;
+const SUCCESSFUL_RENDER_RE = /render pipeline active/i;
+
+const STUB_BRIDGE_SOURCE = `
+const VIEW_MATRIX = [1, 0, 0, 0,
+                     0, 1, 0, 0,
+                     0, 0, 1, 0,
+                     0, 0, 0, 1];
+
+export function createRocqBridge() {
+  let visibleFaces = [];
+
+  function snapshot() {
+    return {
+      position: { x: 0, y: 0, z: 0 },
+      yaw: 0,
+      pitch: 0,
+      visibleFaces: [...visibleFaces],
+      viewMatrix: new Float32Array(VIEW_MATRIX),
+    };
+  }
+
+  return {
+    version: 1,
+
+    async load_world(world) {
+      visibleFaces = Array.isArray(world?.faces)
+        ? world.faces.map((_, fi) => fi)
+        : [];
+      return snapshot();
+    },
+
+    async step() {
+      return snapshot();
+    },
+
+    async reset() {
+      return snapshot();
+    },
+  };
+}
+`;
 
 async function sleep(ms) {
   await new Promise(resolve => setTimeout(resolve, ms));
@@ -33,10 +81,10 @@ async function waitForServer(url, timeoutMs) {
   throw new Error(`timed out waiting for ${url}: ${lastError?.message ?? 'unknown error'}`);
 }
 
-function startStaticServer() {
+function startStaticServer(rootDir, port) {
   const server = spawn(
-    'make',
-    ['serve'],
+    'python3',
+    ['-m', 'http.server', String(port), '--directory', rootDir],
     {
       cwd: ROOT,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -55,27 +103,30 @@ function startStaticServer() {
   return { server, readLogs: () => ({ stdout, stderr }) };
 }
 
-async function maybeStartServer() {
-  try {
-    await waitForServer(URL, 1000);
-    return {
-      server: null,
-      reused: true,
-      readLogs: () => ({ stdout: '', stderr: '' }),
-    };
-  } catch (_) {
-    const started = startStaticServer();
-    await waitForServer(URL, 10000).catch(error => {
-      const logs = started.readLogs();
-      throw new Error(
-        `${error.message}\nstdout:\n${logs.stdout || '(empty)'}\nstderr:\n${logs.stderr || '(empty)'}`
-      );
-    });
-    return {
-      ...started,
-      reused: false,
-    };
+function createSyntheticBsp() {
+  const buffer = new ArrayBuffer(HEADER_SIZE);
+  const view = new DataView(buffer);
+  view.setUint32(0, BSP_MAGIC, true);
+  view.setInt32(4, BSP_VERSION, true);
+  return Buffer.from(buffer);
+}
+
+async function createScenarioRoot(scenarioName) {
+  const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), `orly-${scenarioName}-`));
+  await fs.cp(DOCS_DIR, rootDir, { recursive: true });
+  await fs.rm(path.join(rootDir, 'assets'), { recursive: true, force: true });
+
+  if (scenarioName === 'q3dm1-render-startup') {
+    await fs.mkdir(path.join(rootDir, 'assets', 'maps'), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, 'assets', 'manifest.json'),
+      `${JSON.stringify(['maps/q3dm1.bsp'])}\n`
+    );
+    await fs.writeFile(path.join(rootDir, 'assets', 'maps', 'q3dm1.bsp'), createSyntheticBsp());
+    await fs.writeFile(path.join(rootDir, 'rocq_bridge.js'), STUB_BRIDGE_SOURCE);
   }
+
+  return rootDir;
 }
 
 async function gatherSnapshot(page) {
@@ -125,108 +176,205 @@ async function gatherSnapshotWithRetry(page, attempts = 10) {
   throw lastError;
 }
 
+function hasEvent(consoleEvents, pattern) {
+  return consoleEvents.some(event => pattern.test(event.text));
+}
+
 function detectFailure(snapshot, consoleEvents) {
-  if (consoleEvents.some(event =>
-    /launch failure SecurityError|Failed to construct 'Worker'/.test(event.text)
-  )) {
-    return 'jscoq-worker-security-error';
+  if (hasEvent(consoleEvents, BOOTSTRAP_FAILURE_RE)) {
+    return 'jscoq-bootstrap-failed';
   }
-
-  if (snapshot.assetCount !== null &&
-      snapshot.assetCount > 0 &&
-      snapshot.placeholderHidden === false) {
-    return 'placeholder-still-visible';
+  if (hasEvent(consoleEvents, RENDER_FAILURE_RE)) {
+    return 'render-startup-failed';
   }
-
+  if (snapshot.status?.className === 'error') {
+    return 'status-bar-error';
+  }
   return null;
 }
 
-async function main() {
-  const bspPath = path.join(ROOT, 'docs/assets/maps/q3dm1.bsp');
-  await fs.access(bspPath).catch(() => {
-    throw new Error('docs/assets/maps/q3dm1.bsp is missing; run `make assets` first');
+async function waitForScenario(page, consoleEvents, predicate) {
+  const deadline = Date.now() + TIMEOUT_MS;
+  let snapshot = await gatherSnapshotWithRetry(page);
+
+  while (Date.now() < deadline) {
+    if (predicate(snapshot, consoleEvents) || detectFailure(snapshot, consoleEvents)) {
+      return snapshot;
+    }
+    await page.waitForTimeout(POLL_MS);
+    snapshot = await gatherSnapshotWithRetry(page);
+  }
+
+  return snapshot;
+}
+
+function attachEventCapture(page, consoleEvents) {
+  page.on('console', msg => {
+    consoleEvents.push({
+      kind: 'console',
+      type: msg.type(),
+      text: msg.text(),
+    });
   });
+  page.on('pageerror', error => {
+    consoleEvents.push({
+      kind: 'pageerror',
+      text: error.message,
+    });
+  });
+  page.on('requestfailed', request => {
+    consoleEvents.push({
+      kind: 'requestfailed',
+      text: `${request.method()} ${request.url()} :: ${request.failure()?.errorText ?? 'unknown failure'}`,
+    });
+  });
+}
 
-  const { server, reused, readLogs } = await maybeStartServer();
-  let browser;
+function assertNoAssetsScenario(snapshot, consoleEvents) {
+  const failure = detectFailure(snapshot, consoleEvents);
+  if (failure) {
+    throw new Error(failure);
+  }
+  if (!snapshot.jscoqLoaded) {
+    throw new Error('JsCoq editor did not load');
+  }
+  if (!snapshot.status?.hidden) {
+    throw new Error(`status bar stayed visible: ${snapshot.status?.text ?? '(empty)'}`);
+  }
+  if (snapshot.assetCount !== 0) {
+    throw new Error(`expected no assets, got ${snapshot.assetCount}`);
+  }
+  if (snapshot.placeholderHidden !== false) {
+    throw new Error('placeholder should stay visible when q3dm1 assets are absent');
+  }
+}
 
+function assertRenderStartupScenario(snapshot, consoleEvents) {
+  const failure = detectFailure(snapshot, consoleEvents);
+  if (failure) {
+    throw new Error(failure);
+  }
+  if (!snapshot.jscoqLoaded) {
+    throw new Error('JsCoq editor did not load');
+  }
+  if (!snapshot.status?.hidden) {
+    throw new Error(`status bar stayed visible: ${snapshot.status?.text ?? '(empty)'}`);
+  }
+  if (snapshot.assetCount !== 1) {
+    throw new Error(`expected one stubbed q3dm1 asset, got ${snapshot.assetCount}`);
+  }
+  if (snapshot.placeholderHidden !== true) {
+    throw new Error('placeholder never hid after q3dm1 render startup');
+  }
+  if (!snapshot.canvas || snapshot.canvas.width <= 0 || snapshot.canvas.height <= 0) {
+    throw new Error('game canvas never reached a drawable size');
+  }
+  if (!hasEvent(consoleEvents, SUCCESSFUL_RENDER_RE)) {
+    throw new Error('render pipeline never reported a Rocq-seeded frame');
+  }
+}
+
+async function runScenario(browser, scenarioName, outDir, port) {
+  const scenarioRoot = await createScenarioRoot(scenarioName);
+  const { server, readLogs } = startStaticServer(scenarioRoot, port);
+  const url = `http://127.0.0.1:${port}/`;
   const consoleEvents = [];
+  let page = null;
 
   try {
-    await waitForServer(URL, 10000);
-
-    browser = await chromium.launch({ headless: true });
-    const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
-
-    page.on('console', msg => {
-      consoleEvents.push({
-        kind: 'console',
-        type: msg.type(),
-        text: msg.text(),
-      });
-    });
-    page.on('pageerror', error => {
-      consoleEvents.push({
-        kind: 'pageerror',
-        text: error.message,
-      });
-    });
-    page.on('requestfailed', request => {
-      consoleEvents.push({
-        kind: 'requestfailed',
-        text: `${request.method()} ${request.url()} :: ${request.failure()?.errorText ?? 'unknown failure'}`,
-      });
+    await waitForServer(url, 10000).catch(error => {
+      const logs = readLogs();
+      throw new Error(
+        `${error.message}\nstdout:\n${logs.stdout || '(empty)'}\nstderr:\n${logs.stderr || '(empty)'}`
+      );
     });
 
-    await page.goto(URL, { waitUntil: 'domcontentloaded', timeout: 120000 });
+    page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+    attachEventCapture(page, consoleEvents);
+
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 120000 });
     await page.waitForLoadState('load').catch(() => {});
 
-    let snapshot = await gatherSnapshotWithRetry(page);
-    const deadline = Date.now() + TIMEOUT_MS;
-    while (Date.now() < deadline) {
-      if (detectFailure(snapshot, consoleEvents) || snapshot.placeholderHidden === true || snapshot.status?.className === 'error') {
-        break;
-      }
-      await page.waitForTimeout(POLL_MS);
-      snapshot = await gatherSnapshotWithRetry(page);
-    }
+    const snapshot = await waitForScenario(
+      page,
+      consoleEvents,
+      scenarioName === 'browser-load-no-assets'
+        ? current => current.jscoqLoaded && current.status?.hidden === true
+        : current => current.placeholderHidden === true
+    );
 
-    const outDir = await fs.mkdtemp(path.join(os.tmpdir(), 'orly-q3dm1-repro-'));
-    const screenshotPath = path.join(outDir, 'page.png');
-    const diagnosticsPath = path.join(outDir, 'diagnostics.json');
-
+    const screenshotPath = path.join(outDir, `${scenarioName}.png`);
     await page.screenshot({ path: screenshotPath, fullPage: true });
 
-    const failureReason = detectFailure(snapshot, consoleEvents);
-    const diagnostics = {
-      url: URL,
-      reproduced: failureReason !== null,
-      failureReason,
+    if (scenarioName === 'browser-load-no-assets') {
+      assertNoAssetsScenario(snapshot, consoleEvents);
+    } else {
+      assertRenderStartupScenario(snapshot, consoleEvents);
+    }
+
+    return {
+      scenario: scenarioName,
+      passed: true,
+      url,
       snapshot,
       consoleEvents,
-      reusedServer: reused,
       serverLogs: readLogs(),
       screenshotPath,
     };
-    await fs.writeFile(diagnosticsPath, `${JSON.stringify(diagnostics, null, 2)}\n`);
+  } catch (error) {
+    const screenshotPath = path.join(outDir, `${scenarioName}.png`);
+    await page?.screenshot({ path: screenshotPath, fullPage: true }).catch(() => {});
+    const failureSnapshot = page
+      ? await gatherSnapshotWithRetry(page).catch(() => null)
+      : null;
+    return {
+      scenario: scenarioName,
+      passed: false,
+      url,
+      failure: error.message,
+      snapshot: failureSnapshot,
+      consoleEvents,
+      serverLogs: readLogs(),
+      screenshotPath,
+    };
+  } finally {
+    await page?.close().catch(() => {});
+    server.kill('SIGTERM');
+    await new Promise(resolve => {
+      if (server.exitCode !== null) {
+        resolve();
+      } else {
+        server.once('exit', resolve);
+      }
+    });
+    await fs.rm(scenarioRoot, { recursive: true, force: true }).catch(() => {});
+  }
+}
 
+async function main() {
+  const browser = await chromium.launch({ headless: true });
+
+  try {
+    const outDir = await fs.mkdtemp(path.join(os.tmpdir(), 'orly-q3dm1-regression-'));
+    const diagnosticsPath = path.join(outDir, 'diagnostics.json');
+    const scenarios = [];
+
+    for (const [index, scenarioName] of ['browser-load-no-assets', 'q3dm1-render-startup'].entries()) {
+      scenarios.push(await runScenario(browser, scenarioName, outDir, PORT_BASE + index));
+    }
+
+    const diagnostics = {
+      scenarios,
+    };
+    await fs.writeFile(diagnosticsPath, `${JSON.stringify(diagnostics, null, 2)}\n`);
     process.stdout.write(`${JSON.stringify({ ...diagnostics, diagnosticsPath }, null, 2)}\n`);
 
-    if (!diagnostics.reproduced) {
-      throw new Error(`q3dm1 render failure did not reproduce; inspect ${diagnosticsPath}`);
+    const failed = scenarios.find(scenario => !scenario.passed);
+    if (failed) {
+      throw new Error(`scenario ${failed.scenario} failed; inspect ${diagnosticsPath}`);
     }
   } finally {
-    await browser?.close().catch(() => {});
-    if (server) {
-      server.kill('SIGTERM');
-      await new Promise(resolve => {
-        if (server.exitCode !== null) {
-          resolve();
-        } else {
-          server.once('exit', resolve);
-        }
-      });
-    }
+    await browser.close().catch(() => {});
   }
 }
 

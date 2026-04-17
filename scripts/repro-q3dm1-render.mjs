@@ -7,13 +7,17 @@ import { chromium, devices } from 'playwright';
 
 const ROOT = process.cwd();
 const DOCS_DIR = path.join(ROOT, 'docs');
+const LICENSED_MAP_PATH = 'maps/am_lavaarena.bsp';
+const LICENSED_MAP_SOURCE = path.join(
+  DOCS_DIR,
+  'vendor',
+  'maps',
+  'openarena',
+  'am_lavaarena.bsp'
+);
 const PORT_BASE = Number.parseInt(process.env.ORLY_REPRO_PORT ?? '18080', 10);
 const TIMEOUT_MS = Number.parseInt(process.env.ORLY_REPRO_TIMEOUT_MS ?? '20000', 10);
 const POLL_MS = 500;
-const BSP_MAGIC = 0x49425350;
-const BSP_VERSION = 46;
-const NUM_LUMPS = 17;
-const HEADER_SIZE = 8 + NUM_LUMPS * 8;
 const BOOTSTRAP_FAILURE_RE =
   /launch failure SecurityError|Failed to construct 'Worker'|JsCoq bootstrap failed/i;
 const RENDER_FAILURE_RE = /BSP render init failed|Render error:/i;
@@ -114,26 +118,18 @@ function startStaticServer(rootDir, port) {
   return { server, readLogs: () => ({ stdout, stderr }) };
 }
 
-function createSyntheticBsp() {
-  const buffer = new ArrayBuffer(HEADER_SIZE);
-  const view = new DataView(buffer);
-  view.setUint32(0, BSP_MAGIC, true);
-  view.setInt32(4, BSP_VERSION, true);
-  return Buffer.from(buffer);
-}
-
 async function createScenarioRoot(scenarioName) {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), `orly-${scenarioName}-`));
   await fs.cp(DOCS_DIR, rootDir, { recursive: true });
   await fs.rm(path.join(rootDir, 'assets'), { recursive: true, force: true });
 
-  if (scenarioName === 'q3dm1-render-startup') {
+  if (scenarioName === 'licensed-map-render-startup') {
     await fs.mkdir(path.join(rootDir, 'assets', 'maps'), { recursive: true });
     await fs.writeFile(
       path.join(rootDir, 'assets', 'manifest.json'),
-      `${JSON.stringify(['maps/q3dm1.bsp'])}\n`
+      `${JSON.stringify([LICENSED_MAP_PATH])}\n`
     );
-    await fs.writeFile(path.join(rootDir, 'assets', 'maps', 'q3dm1.bsp'), createSyntheticBsp());
+    await fs.copyFile(LICENSED_MAP_SOURCE, path.join(rootDir, 'assets', LICENSED_MAP_PATH));
     await fs.writeFile(path.join(rootDir, 'rocq_bridge.js'), STUB_BRIDGE_SOURCE);
   }
 
@@ -351,13 +347,16 @@ function assertNoAssetsScenario(snapshot, consoleEvents) {
     throw new Error(`expected no assets, got ${snapshot.assetCount}`);
   }
   if (snapshot.placeholder?.hidden !== false) {
-    throw new Error('placeholder should stay visible when q3dm1 assets are absent');
+    throw new Error('placeholder should stay visible when no playable BSP is available');
   }
   if (snapshot.placeholder?.state !== 'idle') {
     throw new Error(`expected idle placeholder state, got ${snapshot.placeholder?.state ?? '(missing)'}`);
   }
-  if (snapshot.placeholder?.title !== 'q3dm1 assets not found') {
+  if (snapshot.placeholder?.title !== 'No playable BSP found') {
     throw new Error(`unexpected no-assets placeholder title: ${snapshot.placeholder?.title ?? '(missing)'}`);
+  }
+  if (!snapshot.placeholder?.detail.includes('make stage-pages-map')) {
+    throw new Error(`unexpected no-assets placeholder detail: ${snapshot.placeholder?.detail ?? '(missing)'}`);
   }
   if (!snapshot.placeholder?.detail.includes('make assets DEMO=')) {
     throw new Error(`unexpected no-assets placeholder detail: ${snapshot.placeholder?.detail ?? '(missing)'}`);
@@ -379,10 +378,10 @@ function assertRenderStartupScenario(snapshot, consoleEvents) {
     throw new Error(`status bar stayed visible: ${snapshot.status?.text ?? '(empty)'}`);
   }
   if (snapshot.assetCount !== 1) {
-    throw new Error(`expected one stubbed q3dm1 asset, got ${snapshot.assetCount}`);
+    throw new Error(`expected one licensed map asset, got ${snapshot.assetCount}`);
   }
   if (snapshot.placeholder?.hidden !== true) {
-    throw new Error('placeholder never hid after q3dm1 render startup');
+    throw new Error('placeholder never hid after licensed-map render startup');
   }
   if (snapshot.placeholder?.state !== 'ready') {
     throw new Error(`expected ready placeholder state after render, got ${snapshot.placeholder?.state ?? '(missing)'}`);
@@ -612,7 +611,7 @@ async function main() {
   const browser = await chromium.launch({ headless: true });
 
   try {
-    const outDir = await fs.mkdtemp(path.join(os.tmpdir(), 'orly-q3dm1-regression-'));
+    const outDir = await fs.mkdtemp(path.join(os.tmpdir(), 'orly-licensed-map-regression-'));
     const diagnosticsPath = path.join(outDir, 'diagnostics.json');
     const scenarios = [];
 
@@ -624,8 +623,8 @@ async function main() {
         },
       },
       {
-        name: 'q3dm1-render-startup-desktop',
-        rootScenario: 'q3dm1-render-startup',
+        name: 'licensed-map-render-startup-desktop',
+        rootScenario: 'licensed-map-render-startup',
         contextOptions: {
           viewport: { width: 1280, height: 720 },
         },
@@ -634,8 +633,8 @@ async function main() {
         },
       },
       {
-        name: 'q3dm1-render-startup-mobile-portrait',
-        rootScenario: 'q3dm1-render-startup',
+        name: 'licensed-map-render-startup-mobile-portrait',
+        rootScenario: 'licensed-map-render-startup',
         contextOptions: IPHONE_13,
         async afterReady(page) {
           return {
@@ -647,8 +646,8 @@ async function main() {
         },
       },
       {
-        name: 'q3dm1-render-startup-mobile-landscape',
-        rootScenario: 'q3dm1-render-startup',
+        name: 'licensed-map-render-startup-mobile-landscape',
+        rootScenario: 'licensed-map-render-startup',
         contextOptions: IPHONE_13_LANDSCAPE,
         async afterReady(page) {
           return {

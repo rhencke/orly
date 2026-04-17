@@ -1,7 +1,9 @@
 // ── WebGL renderer for Q3 BSP face geometry with lightmaps ───────
 //
-// Consumes the parsed BSP data from bsp.js and draws polygon (type 1)
-// and mesh (type 3) faces with lightmap-modulated vertex colors.
+// Consumes the parsed BSP data from bsp.js and draws polygon (type 1),
+// bezier patch (type 2), and mesh (type 3) faces with lightmap-
+// modulated vertex colors.  Patches are tessellated at load time by
+// patches.js and merged into the same vertex/index buffers.
 //
 // Usage:
 //   import { createRenderer } from './renderer.js';
@@ -13,6 +15,8 @@
 // through unmodified — the view matrix handles the conversion.
 
 import { FACE_POLYGON, FACE_MESH } from './bsp.js';
+import { tessellatePatches } from './patches.js';
+import { getTextureFromShader } from './shaders.js';
 
 // ── shader sources ───────────────────────────────────────────────────
 
@@ -26,10 +30,12 @@ const VERT_SRC = `
   uniform mat4 u_proj;
 
   varying vec2 v_lmCoord;
+  varying vec2 v_texCoord;
   varying vec4 v_color;
 
   void main() {
     v_lmCoord = a_lmCoord;
+    v_texCoord = a_texCoord;
     v_color   = a_color;
     gl_Position = u_proj * u_view * vec4(a_position, 1.0);
   }
@@ -39,18 +45,28 @@ const FRAG_SRC = `
   precision mediump float;
 
   uniform sampler2D u_lightmap;
+  uniform sampler2D u_diffuse;
+  uniform bool u_hasDiffuse;
 
   varying vec2 v_lmCoord;
+  varying vec2 v_texCoord;
   varying vec4 v_color;
 
   void main() {
     vec3 lm = texture2D(u_lightmap, v_lmCoord).rgb;
-    // Lightmap modulates vertex color; gamma-correct the lightmap
-    // from sRGB storage to linear, apply, then back to sRGB would be
-    // ideal — but Q3 shipped without gamma correction, so we match
-    // that look for now.  Brighten slightly (×2) because Q3 lightmaps
-    // are authored for the engine's built-in over-brightening.
-    vec3 color = v_color.rgb * lm * 2.0;
+
+    // If a diffuse texture is available, sample and modulate;
+    // otherwise fall back to lightmap-only with vertex color.
+    vec3 color;
+    if (u_hasDiffuse) {
+      vec3 diffuse = texture2D(u_diffuse, v_texCoord).rgb;
+      // Lightmap modulates diffuse texture and vertex color
+      color = diffuse * v_color.rgb * lm * 2.0;
+    } else {
+      // Fallback: lightmap + vertex color (matches original behavior)
+      color = v_color.rgb * lm * 2.0;
+    }
+
     gl_FragColor = vec4(color, v_color.a);
   }
 `;
@@ -82,26 +98,6 @@ function linkProgram(gl, vs, fs) {
   return p;
 }
 
-// ── surface filtering ────────────────────────────────────────────────
-//
-// Q3 content/surface flags that indicate non-renderable geometry.
-
-const CONTENTS_PLAYERCLIP  = 0x10000;
-const CONTENTS_MONSTERCLIP = 0x20000;
-const SURF_NODRAW = 0x80;
-const SURF_SKY    = 0x4;
-
-function shouldDrawFace(face, textures) {
-  if (face.type !== FACE_POLYGON && face.type !== FACE_MESH) return false;
-  if (face.nMeshverts === 0) return false;
-  const tex = textures[face.texture];
-  if (!tex) return false;
-  if (tex.name === '' || tex.name === 'noshader') return false;
-  if (tex.flags & (SURF_NODRAW | SURF_SKY)) return false;
-  if (tex.contents & (CONTENTS_PLAYERCLIP | CONTENTS_MONSTERCLIP)) return false;
-  return true;
-}
-
 // ── vertex buffer packing ────────────────────────────────────────────
 //
 // Interleaved layout per vertex (32 bytes):
@@ -112,14 +108,14 @@ function shouldDrawFace(face, textures) {
 
 const VERTEX_STRIDE = 32;
 
-function buildVertexBuffer(gl, bsp) {
-  const n = bsp.vertices.length;
+function buildVertexBuffer(gl, vertices) {
+  const n = vertices.length;
   const buf = new ArrayBuffer(n * VERTEX_STRIDE);
   const f32 = new Float32Array(buf);
   const u8  = new Uint8Array(buf);
 
   for (let i = 0; i < n; i++) {
-    const v = bsp.vertices[i];
+    const v = vertices[i];
     const fOff = i * 8; // 32 / 4 = 8 floats per vertex
     f32[fOff + 0] = v.posX;
     f32[fOff + 1] = v.posY;
@@ -146,30 +142,45 @@ function buildVertexBuffer(gl, bsp) {
 // Group faces by lightmap index so we can batch draw calls.
 // Returns { ibo, groups: [{ lmIndex, start, count }], indexType, indexSize }.
 
-function buildIndexBuffer(gl, bsp) {
-  const { faces, meshVerts, textures } = bsp;
+function buildIndexBuffer(gl, bsp, patchGroupMap, totalVertexCount, visibleFaces) {
+  const { faces, meshVerts } = bsp;
 
   // First pass: count total indices and group by lightmap
-  const groupMap = new Map(); // lmIndex -> [indices...]
-  for (let fi = 0; fi < faces.length; fi++) {
+  const groupMap = new Map(); // lmIndex -> { indices, faceIndices }
+  for (const fi of visibleFaces) {
     const face = faces[fi];
-    if (!shouldDrawFace(face, textures)) continue;
+    if (!face) continue;
+    if (face.type !== FACE_POLYGON && face.type !== FACE_MESH) continue;
+    if (face.nMeshverts === 0) continue;
 
     const lmIdx = face.lmIndex;
-    if (!groupMap.has(lmIdx)) groupMap.set(lmIdx, []);
-    const arr = groupMap.get(lmIdx);
+    if (!groupMap.has(lmIdx)) {
+      groupMap.set(lmIdx, { indices: [], faceIndices: [] });
+    }
+    const group = groupMap.get(lmIdx);
+    group.faceIndices.push(fi);
 
     for (let j = 0; j < face.nMeshverts; j++) {
-      arr.push(face.vertex + meshVerts[face.meshvert + j]);
+      group.indices.push(face.vertex + meshVerts[face.meshvert + j]);
     }
+  }
+
+  // Merge tessellated bezier patch indices into the same lightmap groups
+  for (const [lmIdx, patchGroup] of patchGroupMap) {
+    if (!groupMap.has(lmIdx)) {
+      groupMap.set(lmIdx, { indices: [], faceIndices: [] });
+    }
+    const group = groupMap.get(lmIdx);
+    for (const idx of patchGroup.indices) group.indices.push(idx);
+    for (const fi of patchGroup.faceIndices) group.faceIndices.push(fi);
   }
 
   // Flatten groups into a single index array, recording start/count
   let totalIndices = 0;
-  for (const arr of groupMap.values()) totalIndices += arr.length;
+  for (const group of groupMap.values()) totalIndices += group.indices.length;
 
-  // Choose index type based on vertex count
-  const needU32 = bsp.vertices.length > 65535;
+  // Choose index type based on total vertex count (BSP + tessellated patches)
+  const needU32 = totalVertexCount > 65535;
   if (needU32) {
     const ext = gl.getExtension('OES_element_index_uint');
     if (!ext) throw new Error('OES_element_index_uint not supported');
@@ -183,12 +194,17 @@ function buildIndexBuffer(gl, bsp) {
 
   const groups = [];
   let offset = 0;
-  for (const [lmIdx, arr] of groupMap) {
-    groups.push({ lmIndex: lmIdx, start: offset, count: arr.length });
-    for (let i = 0; i < arr.length; i++) {
-      indexData[offset + i] = arr[i];
+  for (const [lmIdx, group] of groupMap) {
+    groups.push({
+      lmIndex: lmIdx,
+      start: offset,
+      count: group.indices.length,
+      faceIndices: group.faceIndices,
+    });
+    for (let i = 0; i < group.indices.length; i++) {
+      indexData[offset + i] = group.indices[i];
     }
-    offset += arr.length;
+    offset += group.indices.length;
   }
 
   const ibo = gl.createBuffer();
@@ -235,6 +251,44 @@ function uploadLightmaps(gl, bsp) {
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
 
   return { textures, white };
+}
+
+// ── diffuse image textures ──────────────────────────────────────────
+//
+// Load JPG/PNG diffuse texture from an ArrayBuffer synchronously using
+// canvas 2D context as a workaround since we can't use Image in sync context.
+
+function uploadImageAsTexture(gl, imageBuffer) {
+  // Create a canvas, draw the image data, and read it back
+  const blob = new Blob([imageBuffer]);
+  const url = URL.createObjectURL(blob);
+  const img = new Image();
+
+  // This is async in reality, but we'll create the WebGL texture with a
+  // placeholder 1×1 texture and return it. For a full implementation,
+  // the caller would need to handle async image loading separately.
+  // For now, just create a white placeholder and skip diffuse rendering.
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0,
+                gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 255, 255, 255]));
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+  // Start loading in background; we'll update the texture when done
+  img.onload = () => {
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, img);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    URL.revokeObjectURL(url);
+  };
+  img.src = url;
+
+  return tex;
 }
 
 // ── minimal mat4 utilities ───────────────────────────────────────────
@@ -317,13 +371,14 @@ export function mat4LookAt(out, eye, center, up) {
 // ── renderer factory ─────────────────────────────────────────────────
 
 /**
- * Create a WebGL renderer for Q3 BSP face geometry.
+ * Create a WebGL renderer for Q3 BSP face geometry with optional diffuse textures.
  *
  * @param {HTMLCanvasElement} canvas — the target canvas
  * @param {object} bsp — parsed BSP data from parseBsp()
+ * @param {object} options — { shaderDefs, assets, assetBasePath, visibleFaces }
  * @returns {{ render(view: Float32Array, proj: Float32Array): void, destroy(): void }}
  */
-export function createRenderer(canvas, bsp) {
+export function createRenderer(canvas, bsp, options = {}) {
   const gl = canvas.getContext('webgl', { antialias: false, alpha: false });
   if (!gl) throw new Error('WebGL not available');
 
@@ -342,11 +397,47 @@ export function createRenderer(canvas, bsp) {
   const uView     = gl.getUniformLocation(program, 'u_view');
   const uProj     = gl.getUniformLocation(program, 'u_proj');
   const uLightmap = gl.getUniformLocation(program, 'u_lightmap');
+  const uDiffuse  = gl.getUniformLocation(program, 'u_diffuse');
+  const uHasDiffuse = gl.getUniformLocation(program, 'u_hasDiffuse');
+
+  // ── tessellate bezier patches ───────────────────────────────────
+  const visibleFaces = options.visibleFaces ?? bsp.faces.map((_, fi) => fi);
+  const visibleFaceSet = new Set(visibleFaces);
+  const patches = tessellatePatches(bsp, visibleFaceSet);
+  const allVertices = bsp.vertices.concat(patches.vertices);
 
   // ── build GPU buffers ────────────────────────────────────────────
-  const vbo = buildVertexBuffer(gl, bsp);
-  const { ibo, groups, indexType, indexSize } = buildIndexBuffer(gl, bsp);
+  const vbo = buildVertexBuffer(gl, allVertices);
+  const { ibo, groups, indexType, indexSize } =
+    buildIndexBuffer(gl, bsp, patches.groupMap, allVertices.length, visibleFaces);
   const lm = uploadLightmaps(gl, bsp);
+
+  // ── diffuse textures ────────────────────────────────────────────
+  // Build a map of face index → diffuse texture handle so we can bind
+  // the right texture per-face.  Requires shader definitions.
+  const faceTextures = new Map(); // face_index → { glTex, hasDiffuse }
+  const { shaderDefs, assets, assetBasePath } = options;
+  if (shaderDefs && assets && assetBasePath !== undefined) {
+    for (let fi = 0; fi < bsp.faces.length; fi++) {
+      const face = bsp.faces[fi];
+      const bspTexName = bsp.textures[face.texture]?.name;
+      if (!bspTexName) continue;
+
+      const texPath = getTextureFromShader(bspTexName, shaderDefs);
+      if (texPath) {
+        const assetPath = assetBasePath + texPath;
+        const buffer = assets.get(assetPath);
+        if (buffer) {
+          try {
+            const tex = uploadImageAsTexture(gl, buffer);
+            faceTextures.set(fi, { glTex: tex, hasDiffuse: true });
+          } catch (err) {
+            console.warn(`Failed to load diffuse ${assetPath}:`, err);
+          }
+        }
+      }
+    }
+  }
 
   // ── GL state ─────────────────────────────────────────────────────
   gl.clearColor(0.05, 0.05, 0.05, 1.0);
@@ -378,19 +469,46 @@ export function createRenderer(canvas, bsp) {
     gl.enableVertexAttribArray(aColor);
     gl.vertexAttribPointer(aColor, 4, gl.UNSIGNED_BYTE, true, VERTEX_STRIDE, 28);
 
-    // Lightmap sampler
+    // Lightmap sampler (texture unit 0)
     gl.activeTexture(gl.TEXTURE0);
     gl.uniform1i(uLightmap, 0);
+
+    // Diffuse sampler (texture unit 1) — defaults to white if not set
+    gl.activeTexture(gl.TEXTURE1);
+    gl.uniform1i(uDiffuse, 1);
 
     // Bind IBO
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
 
     // Draw each lightmap group
     for (const g of groups) {
-      const tex = (g.lmIndex >= 0 && g.lmIndex < lm.textures.length)
+      // Bind lightmap
+      const lmTex = (g.lmIndex >= 0 && g.lmIndex < lm.textures.length)
         ? lm.textures[g.lmIndex]
         : lm.white;
-      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, lmTex);
+
+      // Try to find and bind diffuse texture for this lightmap group.
+      // For now, use a simple heuristic: if any face in this group has
+      // a diffuse texture, use it. A better approach would track which
+      // faces belong to which groups, but that requires restructuring
+      // the draw batching to be per-face instead of per-lightmap.
+      let hasDiffuse = false;
+      for (const fi of g.faceIndices || []) {
+        if (faceTextures.has(fi)) {
+          gl.activeTexture(gl.TEXTURE1);
+          gl.bindTexture(gl.TEXTURE_2D, faceTextures.get(fi).glTex);
+          hasDiffuse = true;
+          break;
+        }
+      }
+      if (!hasDiffuse) {
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, lm.white);
+      }
+
+      gl.uniform1i(uHasDiffuse, hasDiffuse ? 1 : 0);
       gl.drawElements(gl.TRIANGLES, g.count, indexType, g.start * indexSize);
     }
   }

@@ -378,6 +378,29 @@ export const FACE_PATCH    = 2;
 export const FACE_MESH     = 3;
 export const FACE_BILLBOARD = 4;
 
+// ── surface visibility ──────────────────────────────────────────────
+//
+// Q3 content/surface flags that mark non-renderable geometry.  Shared
+// by the polygon/mesh renderer and the bezier patch tessellator so
+// filtering logic lives in one place.
+
+const CONTENTS_PLAYERCLIP  = 0x10000;
+const CONTENTS_MONSTERCLIP = 0x20000;
+const SURF_NODRAW = 0x80;
+const SURF_SKY    = 0x4;
+
+/**
+ * Returns true if the given BSP texture entry represents a visible,
+ * drawable surface (not a clip brush, sky, nodraw, etc.).
+ */
+export function isVisibleTexture(tex) {
+  if (!tex) return false;
+  if (tex.name === '' || tex.name === 'noshader') return false;
+  if (tex.flags & (SURF_NODRAW | SURF_SKY)) return false;
+  if (tex.contents & (CONTENTS_PLAYERCLIP | CONTENTS_MONSTERCLIP)) return false;
+  return true;
+}
+
 // ── top-level parser ─────────────────────────────────────────────────
 
 /**

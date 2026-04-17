@@ -64,7 +64,10 @@ Additional relevant prohibitions:
 committed to this repository or to the `docs/` build output that Pages serves.
 Any build or CI step that would publish extracted asset files to Pages would
 constitute redistribution of individual extracted files and/or public display,
-both of which the EULA prohibits.
+both of which the EULA prohibits.  The public Pages deployment may still host
+the HTML/CSS/JS/Rocq shell itself, but it must treat q3dm1 asset loading as a
+local, user-supplied step rather than shipping a publicly playable copy of the
+map.
 
 ### Approved approach for local development and CI
 
@@ -77,6 +80,10 @@ Users must supply their own copy of the demo distribution.  A future
 3. Serve or incorporate those files into the local build.
 
 The extracted files must never be committed, pushed, or deployed.
+
+In practice this means the public site can only demonstrate the shell, theory
+loading, and "bring your own demo assets" flow.  Any actually playable q3dm1
+session has to come from a local build fed by the user's own demo package.
 
 ## Required file manifest
 

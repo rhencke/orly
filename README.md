@@ -5,6 +5,11 @@ The game logic runs in [Rocq](https://rocq-prover.org/) (formerly Coq),
 interpreted live by [JsCoq](https://github.com/jscoq/jscoq) so you can
 read and step through the proofs on the same page as the running game.
 
+Because the Quake 3 demo license does not permit publishing extracted map
+assets on GitHub Pages, the public site ships the browser shell and Rocq
+theories only.  To actually play q3dm1, extract your own demo assets locally
+with `make assets`, then serve the repo yourself.
+
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the Rocq/JavaScript boundary and
 [V1_CHECKLIST.md](V1_CHECKLIST.md) for the v1 acceptance target.
 
@@ -74,8 +79,8 @@ the shell without assets.
 
 ### Browser regression smoke test
 
-To run the Playwright regression coverage for browser load and q3dm1 render
-startup:
+To run the Playwright regression coverage for browser load plus desktop/mobile
+q3dm1 startup:
 
 ```sh
 npm ci
@@ -83,12 +88,16 @@ npm run playwright:install
 npm run test:q3dm1-browser
 ```
 
-The smoke test runs two scenarios against the local browser build:
+The regression script runs four scenarios against the local browser build:
 
 1. the assetless page load path, to ensure the JsCoq worker bootstrap still
    succeeds without tripping over browser security restrictions
-2. a stubbed `maps/q3dm1.bsp` startup path, to ensure the Rocq-seeded render
-   pipeline reaches its first frame and hides the placeholder
+2. a desktop stubbed `maps/q3dm1.bsp` startup path, to ensure the Rocq-seeded
+   render pipeline reaches its first frame and hides the placeholder
+3. an iPhone-sized portrait startup path, to ensure the mobile controls stay
+   visible, large enough to use, and safely inside the viewport
+4. an iPhone-sized landscape startup path, to ensure the split layout, control
+   reachability, and touch resize handle remain usable after rotation
 
 It writes screenshots plus JSON diagnostics under your system temp directory.
 

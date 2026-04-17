@@ -636,6 +636,26 @@
     // so the renderer gets a correctly sized drawing surface.
     const canvas = document.getElementById('game-canvas');
     const touchOverlay = document.getElementById('touch-controls');
+    const canvasHost = canvas.parentElement;
+
+    function syncCanvasSize() {
+      if (!canvasHost) return;
+      const { width, height } = canvasHost.getBoundingClientRect();
+      canvas.width = Math.max(1, Math.round(width));
+      canvas.height = Math.max(1, Math.round(height));
+    }
+
+    function nextAnimationFrame() {
+      return new Promise(resolve => requestAnimationFrame(resolve));
+    }
+
+    syncCanvasSize();
+    const ro = new ResizeObserver(() => {
+      syncCanvasSize();
+    });
+    if (canvasHost) {
+      ro.observe(canvasHost);
+    }
 
     // ── BSP parse + render pipeline ──────────────────────────────
     // If the BSP file was loaded, parse it and start the renderer.
@@ -675,12 +695,22 @@
           visibleFaces: initialSnapshot.visibleFaces,
         });
 
-        // Hide the placeholder — WebGL is live
-        document.getElementById('game-placeholder').hidden = true;
-
         const projMatrix = new Float32Array(16);
         const playerInput = createPlayerInput(canvas, touchOverlay);
         let lastFrameTime = null;
+
+        function renderSnapshot(snapshot) {
+          syncCanvasSize();
+          const aspect = canvas.width / canvas.height || 1;
+          mat4Perspective(projMatrix, Math.PI / 2, aspect, 1.0, 4096.0);
+          renderer.render(snapshot.viewMatrix, projMatrix);
+        }
+
+        await nextAnimationFrame();
+        renderSnapshot(initialSnapshot);
+
+        // Hide the placeholder only after a real Rocq-seeded frame has drawn.
+        document.getElementById('game-placeholder').hidden = true;
 
         async function frame(now) {
           const dtMs = lastFrameTime === null
@@ -688,15 +718,9 @@
             : Math.min(100, Math.max(0, now - lastFrameTime));
           lastFrameTime = now;
           const snapshot = await rocqBridge.step(playerInput.sample(dtMs));
-          // Update projection each frame to track canvas resize
-          const aspect = canvas.width / canvas.height || 1;
-          mat4Perspective(projMatrix, Math.PI / 2, aspect, 1.0, 4096.0);
-          renderer.render(snapshot.viewMatrix, projMatrix);
+          renderSnapshot(snapshot);
           requestAnimationFrame(frame);
         }
-        const initialAspect = canvas.width / canvas.height || 1;
-        mat4Perspective(projMatrix, Math.PI / 2, initialAspect, 1.0, 4096.0);
-        renderer.render(initialSnapshot.viewMatrix, projMatrix);
         requestAnimationFrame(frame);
 
         clearStatus();
@@ -706,13 +730,6 @@
         showStatus(`Render error: ${err.message}`, 'error');
       }
     }
-    const ro = new ResizeObserver(([entry]) => {
-      const { width, height } = entry.contentRect;
-      canvas.width  = Math.round(width);
-      canvas.height = Math.round(height);
-    });
-    ro.observe(canvas.parentElement);
-
     // ── direction-aware drag-to-resize ───────────────────────────
     //
     // CSS switches #main between column (portrait/narrow) and row

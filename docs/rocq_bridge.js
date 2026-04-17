@@ -2,8 +2,9 @@ import { mat4LookAt } from './renderer.js';
 
 const DEG_TO_RAD = Math.PI / 180;
 const BRIDGE_VERSION = 1;
-const BRIDGE_HELPERS_DEFINITION = 'Definition initial_visible_faces_from_inputs';
+const BRIDGE_HELPERS_DEFINITION = 'Definition step_world_words';
 const CAMERA_WORDS_COUNT = 10;
+const GAME_STATE_WORDS_COUNT = 18;
 
 function nextTick() {
   return new Promise(resolve => setTimeout(resolve, 0));
@@ -86,6 +87,59 @@ function cameraSnapshotFromWords(words) {
   };
 }
 
+/**
+ * Extract a camera snapshot from a serialized game-state word list.
+ *
+ * Word layout (see game_state_to_words in GameState.v):
+ *   0-5   position xyz  (three Q rationals, num/den pairs)
+ *   6-11  velocity xyz  (three Q rationals, num/den pairs — not needed here)
+ *   12-13 yaw           (Q rational, num/den)
+ *   14-15 pitch         (Q rational, num/den)
+ *   16    on_ground
+ *   17    tick
+ */
+function cameraSnapshotFromGameStateWords(words) {
+  const toQ = (n, d) => n / d;
+  return {
+    position: {
+      x: toQ(words[0],  words[1]),
+      y: toQ(words[2],  words[3]),
+      z: toQ(words[4],  words[5]),
+    },
+    yaw:   toQ(words[12], words[13]),
+    pitch: toQ(words[14], words[15]),
+  };
+}
+
+function snapshotFromGameStateWords(gsWords, visibleFaces) {
+  const camera = cameraSnapshotFromGameStateWords(gsWords);
+  return {
+    ...camera,
+    visibleFaces: [...visibleFaces],
+    viewMatrix: buildViewMatrix(camera),
+  };
+}
+
+/**
+ * Format a JS input snapshot (or null) as a Rocq input_snapshot expression.
+ * Until keyboard/mouse wiring lands in a later task, null maps to the zero
+ * snapshot so that step calls are valid Rocq before input is plumbed.
+ */
+function formatInputSnapshot(input) {
+  if (!input) return 'input_snapshot_zero';
+  const fmt = b => (b ? 'true' : 'false');
+  const fmtQ = x => {
+    const r = Math.round(x * 1000);
+    return `(${r} # 1000)`;
+  };
+  return `(mk_input_snapshot ` +
+    `${fmt(input.forward)} ${fmt(input.back)} ` +
+    `${fmt(input.left)} ${fmt(input.right)} ` +
+    `${fmt(input.jump)} ` +
+    `${fmtQ(input.yawDelta || 0)} ${fmtQ(input.pitchDelta || 0)} ` +
+    `${Math.round(input.dtMs || 0)})`;
+}
+
 function buildViewMatrix(camera) {
   const viewMatrix = new Float32Array(16);
   const yawRad = camera.yaw * DEG_TO_RAD;
@@ -145,12 +199,17 @@ async function ensureBridgeHelpersReady(manager) {
   throw new Error('Rocq bridge helper definitions were not found in the loaded theory');
 }
 
-async function evalCameraWords(manager, sid, world) {
+async function evalInitialGameStateWords(manager, sid, world) {
   const command =
-    `Eval cbv in (initial_camera_words_from_inputs ` +
-    `${formatEntities(world.entities)} ${formatFaces(world.faces)} ${formatTextures(world.textures)}).`;
+    `Eval cbv in (initial_game_state_words_from_entities ` +
+    `${formatEntities(world.entities)}).`;
   const messages = await manager.coq.queryPromise(sid, ['Vernac', command]);
-  return parseCameraWords(flattenMessages(manager, messages));
+  const words = parseZList(flattenMessages(manager, messages));
+  if (words.length !== GAME_STATE_WORDS_COUNT) {
+    throw new Error(
+      `expected ${GAME_STATE_WORDS_COUNT} game-state words, got ${words.length}`);
+  }
+  return words;
 }
 
 async function evalVisibleFaces(manager, sid, world) {
@@ -161,13 +220,32 @@ async function evalVisibleFaces(manager, sid, world) {
   return parseZList(flattenMessages(manager, messages));
 }
 
+async function evalStepWorldWords(manager, sid, gsWords, inputSnapshot) {
+  const command =
+    `Eval cbv in (step_world_words ` +
+    `${formatZList(gsWords)} ${formatInputSnapshot(inputSnapshot)}).`;
+  const messages = await manager.coq.queryPromise(sid, ['Vernac', command]);
+  const words = parseZList(flattenMessages(manager, messages));
+  if (words.length !== GAME_STATE_WORDS_COUNT) {
+    throw new Error(
+      `expected ${GAME_STATE_WORDS_COUNT} game-state words from step, got ${words.length}`);
+  }
+  return words;
+}
+
 export function createRocqBridge(manager) {
   let bridgeHelpersSidPromise = null;
-  let initialSnapshot = null;
+  let gsWords = null;        // current game-state word list
+  let initialGsWords = null; // snapshot saved at load_world for reset()
+  let visibleFaces = null;   // static visible-face indices (no PVS yet)
 
   function getBridgeHelpersSid() {
     bridgeHelpersSidPromise ||= ensureBridgeHelpersReady(manager);
     return bridgeHelpersSidPromise;
+  }
+
+  function assertLoaded() {
+    if (!gsWords) throw new Error('load_world must run before step/reset');
   }
 
   return {
@@ -175,31 +253,27 @@ export function createRocqBridge(manager) {
 
     async load_world(world) {
       const sid = await getBridgeHelpersSid();
-      const [words, visibleFaces] = await Promise.all([
-        evalCameraWords(manager, sid, world),
+      const [words, faces] = await Promise.all([
+        evalInitialGameStateWords(manager, sid, world),
         evalVisibleFaces(manager, sid, world),
       ]);
-      const camera = cameraSnapshotFromWords(words);
-      initialSnapshot = {
-        ...camera,
-        visibleFaces,
-        viewMatrix: buildViewMatrix(camera),
-      };
-      return cloneSnapshot(initialSnapshot);
+      gsWords        = words;
+      initialGsWords = [...words];
+      visibleFaces   = faces;
+      return snapshotFromGameStateWords(gsWords, visibleFaces);
     },
 
-    async step(_inputSnapshot) {
-      if (!initialSnapshot) {
-        throw new Error('load_world must run before step');
-      }
-      return cloneSnapshot(initialSnapshot);
+    async step(inputSnapshot) {
+      assertLoaded();
+      const sid = await getBridgeHelpersSid();
+      gsWords = await evalStepWorldWords(manager, sid, gsWords, inputSnapshot);
+      return snapshotFromGameStateWords(gsWords, visibleFaces);
     },
 
     async reset() {
-      if (!initialSnapshot) {
-        throw new Error('load_world must run before reset');
-      }
-      return cloneSnapshot(initialSnapshot);
+      assertLoaded();
+      gsWords = [...initialGsWords];
+      return snapshotFromGameStateWords(gsWords, visibleFaces);
     },
   };
 }

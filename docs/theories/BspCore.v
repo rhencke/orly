@@ -1093,3 +1093,174 @@ Proof.
   apply (visible_face_indices_aux_bounds faces textures 0 i) in Hin.
   simpl in Hin. lia.
 Qed.
+
+(* ------------------------------------------------------------------ *)
+(** ** World-state serialization and frame stepping                    *)
+(* ------------------------------------------------------------------ *)
+
+(** Number of [Z] words produced by [game_state_to_words] for a
+    game state with an empty entity list. *)
+Definition game_state_words_count : nat := 18.
+
+(** Serialize a [game_state] to a flat [list Z] suitable for
+    round-tripping through the JS bridge.  The entity list is
+    omitted; v1 entities carry no per-step dynamic state that
+    needs crossing the bridge boundary.
+
+    Word layout (18 entries):
+    <<
+       0  px_num   1  px_den
+       2  py_num   3  py_den
+       4  pz_num   5  pz_den
+       6  vx_num   7  vx_den
+       8  vy_num   9  vy_den
+      10  vz_num  11  vz_den
+      12 yaw_num  13 yaw_den
+      14 pch_num  15 pch_den
+      16 on_ground          (0 = airborne, 1 = grounded)
+      17 tick
+    >>
+*)
+Definition game_state_to_words (gs : game_state) : list Z :=
+  q_words (v3_x (gs_position gs)) ++
+  q_words (v3_y (gs_position gs)) ++
+  q_words (v3_z (gs_position gs)) ++
+  q_words (v3_x (gs_velocity gs)) ++
+  q_words (v3_y (gs_velocity gs)) ++
+  q_words (v3_z (gs_velocity gs)) ++
+  q_words (gs_yaw gs) ++
+  q_words (gs_pitch gs) ++
+  [(if gs_on_ground gs then 1 else 0)] ++
+  [gs_tick gs].
+
+(** Reconstruct a [game_state] from the word list produced by
+    [game_state_to_words].  Returns [None] on a malformed list or
+    any zero/negative denominator. *)
+Definition game_state_from_words (ws : list Z) : option game_state :=
+  match ws with
+  | [px_n; px_d; py_n; py_d; pz_n; pz_d;
+     vx_n; vx_d; vy_n; vy_d; vz_n; vz_d;
+     yaw_n; yaw_d; pitch_n; pitch_d;
+     on_ground; tick] =>
+      if (px_d <=? 0) || (py_d <=? 0) || (pz_d <=? 0) ||
+         (vx_d <=? 0) || (vy_d <=? 0) || (vz_d <=? 0) ||
+         (yaw_d <=? 0) || (pitch_d <=? 0)
+      then None
+      else
+        Some (mk_game_state
+          (mk_vec3 (Qmake px_n (Z.to_pos px_d))
+                   (Qmake py_n (Z.to_pos py_d))
+                   (Qmake pz_n (Z.to_pos pz_d)))
+          (mk_vec3 (Qmake vx_n (Z.to_pos vx_d))
+                   (Qmake vy_n (Z.to_pos vy_d))
+                   (Qmake vz_n (Z.to_pos vz_d)))
+          (Qmake yaw_n   (Z.to_pos yaw_d))
+          (Qmake pitch_n (Z.to_pos pitch_d))
+          (negb (on_ground =? 0))
+          []
+          tick)
+  | _ => None
+  end.
+
+(** Advance the world by one frame.  For this phase the only change
+    is incrementing [gs_tick]; movement, look, and collision logic
+    will be added in subsequent tasks. *)
+Definition step_world (gs : game_state) (_input : input_snapshot)
+    : game_state :=
+  mk_game_state
+    (gs_position gs)
+    (gs_velocity gs)
+    (gs_yaw gs)
+    (gs_pitch gs)
+    (gs_on_ground gs)
+    (gs_entities gs)
+    (gs_tick gs + 1).
+
+(** Bridge-facing word-level entry point for per-frame stepping.
+    Takes the current game state as a word list (from
+    [game_state_to_words]) plus the packed input snapshot, and
+    returns the updated word list.  A malformed input word list is
+    passed through unchanged. *)
+Definition step_world_words (ws : list Z) (input : input_snapshot)
+    : list Z :=
+  match game_state_from_words ws with
+  | None    => ws
+  | Some gs => game_state_to_words (step_world gs input)
+  end.
+
+(** Bridge-facing entry point for [load_world].  Returns the initial
+    game-state word list from parsed entity data.  Used alongside
+    [initial_visible_faces_from_inputs] to populate the first
+    render snapshot. *)
+Definition initial_game_state_words_from_entities
+    (entities : list bsp_entity) : list Z :=
+  game_state_to_words (game_state_from_entities entities).
+
+(* ------------------------------------------------------------------ *)
+(** ** Correctness lemmas for world stepping                           *)
+(* ------------------------------------------------------------------ *)
+
+Lemma game_state_to_words_length : forall gs,
+  length (game_state_to_words gs) = game_state_words_count.
+Proof.
+  intros gs. unfold game_state_to_words, q_words, game_state_words_count.
+  repeat rewrite length_app. simpl. reflexivity.
+Qed.
+
+(** Stepping preserves position. *)
+Lemma step_world_position : forall gs input,
+  gs_position (step_world gs input) = gs_position gs.
+Proof. reflexivity. Qed.
+
+(** Stepping preserves velocity. *)
+Lemma step_world_velocity : forall gs input,
+  gs_velocity (step_world gs input) = gs_velocity gs.
+Proof. reflexivity. Qed.
+
+(** Stepping preserves orientation. *)
+Lemma step_world_yaw : forall gs input,
+  gs_yaw (step_world gs input) = gs_yaw gs.
+Proof. reflexivity. Qed.
+
+Lemma step_world_pitch : forall gs input,
+  gs_pitch (step_world gs input) = gs_pitch gs.
+Proof. reflexivity. Qed.
+
+(** Stepping increments the tick counter. *)
+Lemma step_world_tick : forall gs input,
+  gs_tick (step_world gs input) = gs_tick gs + 1.
+Proof. reflexivity. Qed.
+
+(** Helper: [Z.pos p] is never [<=? 0]. *)
+Lemma Z_pos_leb_0 : forall p : positive,
+  (Z.pos p <=? 0) = false.
+Proof.
+  intro p. apply Z.leb_gt. apply Pos2Z.is_pos.
+Qed.
+
+(** [game_state_to_words] round-trips through [game_state_from_words]
+    for states with an empty entity list. *)
+Lemma game_state_roundtrip : forall gs,
+  gs_entities gs = [] ->
+  game_state_from_words (game_state_to_words gs) = Some gs.
+Proof.
+  intros gs Hnil.
+  destruct gs as [[px py pz] [vx vy vz] yaw pitch grounded ents tick].
+  simpl in Hnil. subst ents.
+  (* Destruct each Q into num/den so Z.to_pos (Z.pos den) = den by reflexivity. *)
+  destruct px as [pxn pxd], py as [pyn pyd], pz as [pzn pzd].
+  destruct vx as [vxn vxd], vy as [vyn vyd], vz as [vzn vzd].
+  destruct yaw as [yn yd], pitch as [pn pd].
+  unfold game_state_to_words, game_state_from_words, q_words. simpl.
+  repeat rewrite Z_pos_leb_0. simpl.
+  destruct grounded; reflexivity.
+Qed.
+
+(** Serialized word count matches [game_state_words_count]. *)
+Lemma initial_game_state_words_from_entities_length : forall entities,
+  length (initial_game_state_words_from_entities entities) =
+  game_state_words_count.
+Proof.
+  intros entities. unfold initial_game_state_words_from_entities.
+  apply game_state_to_words_length.
+Qed.

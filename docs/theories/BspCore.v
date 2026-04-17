@@ -437,12 +437,33 @@ Definition key_origin : list Z :=
 Definition key_angle : list Z :=
   [97; 110; 103; 108; 101].
 
+(** ASCII encoding of "model". *)
+Definition key_model : list Z :=
+  [109; 111; 100; 101; 108].
+
+(** ASCII encoding of "target". *)
+Definition key_target : list Z :=
+  [116; 97; 114; 103; 101; 116].
+
+(** ASCII encoding of "targetname". *)
+Definition key_targetname : list Z :=
+  [116; 97; 114; 103; 101; 116; 110; 97; 109; 101].
+
+(** ASCII encoding of "trigger_push". *)
+Definition val_trigger_push : list Z :=
+  [116; 114; 105; 103; 103; 101; 114; 95; 112; 117; 115; 104].
+
+(** ASCII encoding of "target_position". *)
+Definition val_target_position : list Z :=
+  [116; 97; 114; 103; 101; 116; 95; 112; 111; 115; 105; 116; 105; 111; 110].
+
 (* ------------------------------------------------------------------ *)
 (** ** Integer value parser                                             *)
 (* ------------------------------------------------------------------ *)
 
 Definition ascii_minus : Z := 45.   (** '-' *)
 Definition ascii_space : Z := 32.   (** ' ' *)
+Definition ascii_star  : Z := 42.   (** '*' *)
 
 (** True iff [c] is an ASCII decimal digit. *)
 Definition is_digit (c : Z) : bool := (48 <=? c) && (c <=? 57).
@@ -484,6 +505,22 @@ Definition parse_int (cs : list Z) : option (Z * list Z) :=
            then let (n, tail) := scan_digits cs 0 (length cs) in
                 Some (n, tail)
            else None
+  end.
+
+(** Parse an inline BSP submodel reference of the form ["*N"].
+    Returns [Some N] iff the string begins with ['*'], the remainder
+    parses as a decimal integer, the parse consumes the full string,
+    and [N] is non-negative. *)
+Definition parse_inline_model_ref (cs : list Z) : option Z :=
+  match cs with
+  | c :: rest =>
+      if c =? ascii_star then
+        match parse_int rest with
+        | Some (n, []) => if n <? 0 then None else Some n
+        | _            => None
+        end
+      else None
+  | [] => None
   end.
 
 (* ------------------------------------------------------------------ *)
@@ -528,6 +565,21 @@ Proof. vm_compute. reflexivity. Qed.
 
 (** Negative integer. *)
 Lemma parse_int_neg_1 : parse_int [45; 49] = Some (-1, []).
+Proof. vm_compute. reflexivity. Qed.
+
+(** A well-formed inline model reference parses successfully. *)
+Lemma parse_inline_model_ref_pos :
+  parse_inline_model_ref [42; 49; 50] = Some 12.
+Proof. vm_compute. reflexivity. Qed.
+
+(** Negative inline model references are rejected. *)
+Lemma parse_inline_model_ref_neg :
+  parse_inline_model_ref [42; 45; 49] = None.
+Proof. vm_compute. reflexivity. Qed.
+
+(** Missing the leading ['*'] is not a valid inline model reference. *)
+Lemma parse_inline_model_ref_missing_star :
+  parse_inline_model_ref [49; 50] = None.
 Proof. vm_compute. reflexivity. Qed.
 (** * Game-state and render-snapshot types for the Rocq game core.
 
@@ -583,6 +635,13 @@ Definition vec3_add (a b : vec3) : vec3 :=
     (v3_y a + v3_y b)
     (v3_z a + v3_z b).
 
+(** Vector subtraction. *)
+Definition vec3_sub (a b : vec3) : vec3 :=
+  mk_vec3
+    (v3_x a - v3_x b)
+    (v3_y a - v3_y b)
+    (v3_z a - v3_z b).
+
 (** Scalar multiplication of a vector. *)
 Definition vec3_scale (k : Q) (v : vec3) : vec3 :=
   mk_vec3
@@ -622,7 +681,8 @@ Definition input_snapshot_zero : input_snapshot :=
     For v1, the primary entity type is [trigger_push] (jump pads). *)
 Record entity_state : Type := mk_entity_state
   { es_entity_index : Z       (** index into [bf_entities] *)
-  ; es_origin       : vec3    (** world-space position *)
+  ; es_model_index  : Z       (** inline BSP submodel index *)
+  ; es_origin       : vec3    (** resolved world-space target/origin *)
   ; es_active       : bool    (** whether the trigger is armed *)
   }.
 
@@ -673,10 +733,17 @@ Record collision_brush_input : Type := mk_collision_brush_input
 Record collision_brush_side_input : Type := mk_collision_brush_side_input
   { cbsi_plane_index : Z }.
 
+(** Minimal BSP submodel data needed for trigger volumes. *)
+Record collision_model_input : Type := mk_collision_model_input
+  { cmi_first_brush : Z
+  ; cmi_num_brushes : Z
+  }.
+
 (** Static BSP collision data provided by the browser at world load. *)
 Record collision_world_input : Type := mk_collision_world_input
   { cwi_planes      : list collision_plane_input
   ; cwi_textures    : list collision_texture_input
+  ; cwi_models      : list collision_model_input
   ; cwi_brushes     : list collision_brush_input
   ; cwi_brush_sides : list collision_brush_side_input
   }.
@@ -748,7 +815,7 @@ Definition visible_face_indices
   visible_face_indices_aux faces textures 0.
 
 Definition collision_world_empty : collision_world_input :=
-  mk_collision_world_input [] [] [] [].
+  mk_collision_world_input [] [] [] [] [].
 
 Definition contents_solid : Z := 1.
 
@@ -935,16 +1002,20 @@ Definition parse_origin_vec3 (cs : list Z) : option vec3 :=
               | _ => None
               end
           end
-      | _ => None
-      end
+       | _ => None
+       end
+   end.
+
+(** True iff entity [e] has the given classname. *)
+Definition entity_classname_eqb (e : bsp_entity) (classname : list Z) : bool :=
+  match entity_get_val e key_classname with
+  | Some v => list_Z_eqb v classname
+  | None   => false
   end.
 
 (** True iff entity [e] has classname [info_player_deathmatch]. *)
 Definition is_spawn_entity (e : bsp_entity) : bool :=
-  match entity_get_val e key_classname with
-  | Some v => list_Z_eqb v val_info_player_deathmatch
-  | None   => false
-  end.
+  entity_classname_eqb e val_info_player_deathmatch.
 
 (** Extract the world-space origin from a spawn entity.
     Returns [None] if no [origin] key is present or the value is
@@ -967,6 +1038,133 @@ Definition spawn_yaw_of_entity (e : bsp_entity) : Q :=
   | None => 0
   end.
 
+(* ------------------------------------------------------------------ *)
+(** ** Trigger metadata extraction from entity data                     *)
+(* ------------------------------------------------------------------ *)
+
+Record trigger_push_metadata : Type := mk_trigger_push_metadata
+  { tpm_model_index : Z
+  ; tpm_target_name : list Z
+  }.
+
+Record target_position_metadata : Type := mk_target_position_metadata
+  { tpos_target_name : list Z
+  ; tpos_origin      : vec3
+  }.
+
+Definition target_position_name_eqb
+    (target : target_position_metadata) (name : list Z) : bool :=
+  list_Z_eqb (tpos_target_name target) name.
+
+(** True iff entity [e] has classname [trigger_push]. *)
+Definition is_trigger_push_entity (e : bsp_entity) : bool :=
+  entity_classname_eqb e val_trigger_push.
+
+(** True iff entity [e] has classname [target_position]. *)
+Definition is_target_position_entity (e : bsp_entity) : bool :=
+  entity_classname_eqb e val_target_position.
+
+(** Extract the inline BSP submodel index from an entity's [model] key. *)
+Definition entity_model_index (e : bsp_entity) : option Z :=
+  match entity_get_val e key_model with
+  | Some v => parse_inline_model_ref v
+  | None   => None
+  end.
+
+(** Extract the target name an entity points at via its [target] key. *)
+Definition entity_target_name (e : bsp_entity) : option (list Z) :=
+  entity_get_val e key_target.
+
+(** Extract the name by which another entity can target this one. *)
+Definition entity_targetname (e : bsp_entity) : option (list Z) :=
+  entity_get_val e key_targetname.
+
+(** Extract a [target_position] origin from entity data. *)
+Definition target_position_origin_of_entity (e : bsp_entity) : option vec3 :=
+  match entity_get_val e key_origin with
+  | Some v => parse_origin_vec3 v
+  | None   => None
+  end.
+
+(** Parse the metadata v1 needs from a [trigger_push] entity.
+    The trigger must carry both an inline [model] reference and a
+    [target] name so later world-building code can resolve it. *)
+Definition parse_trigger_push_metadata (e : bsp_entity)
+    : option trigger_push_metadata :=
+  if is_trigger_push_entity e then
+    match entity_model_index e, entity_target_name e with
+    | Some model_index, Some target_name =>
+        Some (mk_trigger_push_metadata model_index target_name)
+    | _, _ => None
+    end
+  else None.
+
+(** Parse the metadata v1 needs from a [target_position] entity. *)
+Definition parse_target_position_metadata (e : bsp_entity)
+    : option target_position_metadata :=
+  if is_target_position_entity e then
+    match entity_targetname e, target_position_origin_of_entity e with
+    | Some target_name, Some origin =>
+        Some (mk_target_position_metadata target_name origin)
+    | _, _ => None
+    end
+  else None.
+
+Fixpoint collect_target_positions
+    (entities : list bsp_entity) : list target_position_metadata :=
+  match entities with
+  | [] => []
+  | e :: rest =>
+      match parse_target_position_metadata e with
+      | Some target => target :: collect_target_positions rest
+      | None        => collect_target_positions rest
+      end
+  end.
+
+Fixpoint find_target_position_origin
+    (targets : list target_position_metadata) (name : list Z) : option vec3 :=
+  match targets with
+  | [] => None
+  | target :: rest =>
+      if target_position_name_eqb target name
+      then Some (tpos_origin target)
+      else find_target_position_origin rest name
+  end.
+
+Fixpoint initial_trigger_states_from_entities_aux
+    (entities : list bsp_entity)
+    (targets : list target_position_metadata)
+    (entity_index : Z) : list entity_state :=
+  match entities with
+  | [] => []
+  | e :: rest =>
+      let rest_states :=
+        initial_trigger_states_from_entities_aux rest targets (entity_index + 1) in
+      match parse_trigger_push_metadata e with
+      | Some trigger =>
+          match find_target_position_origin targets (tpm_target_name trigger) with
+          | Some origin =>
+              mk_entity_state
+                entity_index
+                (tpm_model_index trigger)
+                origin
+                true :: rest_states
+          | None => rest_states
+          end
+      | None => rest_states
+      end
+  end.
+
+(** Resolve the initial trigger/jump-pad state directly from the BSP
+    entity list by pairing [trigger_push] entities with the
+    [target_position] entities they reference. *)
+Definition initial_trigger_states_from_entities
+    (entities : list bsp_entity) : list entity_state :=
+  initial_trigger_states_from_entities_aux
+    entities
+    (collect_target_positions entities)
+    0.
+
 (** [select_spawn_point entities] returns the position and yaw of the
     first [info_player_deathmatch] entity that has a parseable [origin].
     Returns [None] if no such entity exists. *)
@@ -988,9 +1186,10 @@ Fixpoint select_spawn_point (entities : list bsp_entity)
     [entities]; if none exists, falls back to [game_state_init]. *)
 Definition game_state_from_entities (entities : list bsp_entity)
     : game_state :=
+  let trigger_states := initial_trigger_states_from_entities entities in
   match select_spawn_point entities with
-  | Some (pos, yaw) => mk_game_state pos vec3_zero yaw 0 true [] 0
-  | None            => game_state_init
+  | Some (pos, yaw) => mk_game_state pos vec3_zero yaw 0 true trigger_states 0
+  | None            => mk_game_state vec3_zero vec3_zero 0 0 true trigger_states 0
   end.
 
 (** End-to-end helper for the browser bridge: derive the initial camera
@@ -1061,6 +1260,7 @@ Definition player_radius : Q := 16.
 Definition ground_probe_distance : Q := 1.
 Definition gravity_accel : Q := 800.
 Definition jump_speed : Q := 270.
+Definition trigger_push_travel_time : Q := 1.
 Definition collision_sweep_iterations : nat := 8%nat.
 Definition collision_motion_substeps : nat := 16%nat.
 Definition collision_motion_substep_scale : Q := (1 # 16)%Q.
@@ -1102,6 +1302,19 @@ Definition point_collides_brushb
     end
   else false.
 
+Definition point_collides_brush_geometryb
+    (world : collision_world_input) (pos : vec3) (br : collision_brush_input) : bool :=
+  match Z.max 0 (cbi_num_sides br) with
+  | 0 => false
+  | n =>
+      point_collides_brush_aux
+        (cwi_planes world)
+        (cwi_brush_sides world)
+        pos
+        (cbi_first_side br)
+        (Z.to_nat n)
+  end.
+
 Fixpoint point_collides_world_aux
     (world : collision_world_input) (pos : vec3)
     (brushes : list collision_brush_input) : bool :=
@@ -1115,6 +1328,69 @@ Fixpoint point_collides_world_aux
 Definition point_collides_worldb
     (world : collision_world_input) (pos : vec3) : bool :=
   point_collides_world_aux world pos (cwi_brushes world).
+
+Fixpoint point_collides_model_brushes_aux
+    (world : collision_world_input) (pos : vec3)
+    (brush_index : Z) (fuel : nat) : bool :=
+  match fuel with
+  | O => false
+  | S fuel' =>
+      match nth_z (cwi_brushes world) brush_index with
+      | None => false
+      | Some br =>
+          if point_collides_brush_geometryb world pos br
+          then true
+          else point_collides_model_brushes_aux world pos (brush_index + 1) fuel'
+      end
+  end.
+
+Definition point_collides_modelb
+    (world : collision_world_input) (pos : vec3) (model : collision_model_input) : bool :=
+  match Z.max 0 (cmi_num_brushes model) with
+  | 0 => false
+  | n =>
+      point_collides_model_brushes_aux
+        world pos (cmi_first_brush model) (Z.to_nat n)
+  end.
+
+Definition entity_inside_trigger_modelb
+    (world : collision_world_input) (pos : vec3) (es : entity_state) : bool :=
+  match nth_z (cwi_models world) (es_model_index es) with
+  | Some model => point_collides_modelb world pos model
+  | None => false
+  end.
+
+Definition trigger_push_velocity
+    (pos target_origin : vec3) : vec3 :=
+  let delta := vec3_sub target_origin pos in
+  let t := trigger_push_travel_time in
+  mk_vec3
+    (v3_x delta / t)
+    (v3_y delta / t)
+    ((v3_z delta / t) + gravity_accel * t / 2)%Q.
+
+Fixpoint apply_trigger_pushes
+    (world : collision_world_input) (pos : vec3)
+    (entities : list entity_state)
+    : option vec3 * list entity_state :=
+  match entities with
+  | [] => (None, [])
+  | es :: rest =>
+      let inside := entity_inside_trigger_modelb world pos es in
+      let fired := es_active es && inside in
+      let updated :=
+        mk_entity_state
+          (es_entity_index es)
+          (es_model_index es)
+          (es_origin es)
+          (negb inside) in
+      let '(rest_impulse, rest_entities) := apply_trigger_pushes world pos rest in
+      let impulse :=
+        if fired
+        then Some (trigger_push_velocity pos (es_origin es))
+        else rest_impulse in
+      (impulse, updated :: rest_entities)
+  end.
 
 Fixpoint sweep_to_contact
     (world : collision_world_input) (lo hi : vec3) (fuel : nat) : vec3 :=
@@ -1176,6 +1452,54 @@ Lemma parse_origin_neg_example :
     Some (mk_vec3 (inject_Z (-48)) (inject_Z 128) (inject_Z (-8))).
 Proof. vm_compute. reflexivity. Qed.
 
+Lemma parse_trigger_push_metadata_example :
+  parse_trigger_push_metadata
+    [ (key_classname, val_trigger_push)
+    ; (key_model, [42; 51])
+    ; (key_target, [112; 97; 100; 49])
+    ] =
+  Some (mk_trigger_push_metadata 3 [112; 97; 100; 49]).
+Proof. vm_compute. reflexivity. Qed.
+
+Lemma parse_trigger_push_metadata_requires_target :
+  parse_trigger_push_metadata
+    [ (key_classname, val_trigger_push)
+    ; (key_model, [42; 51])
+    ] = None.
+Proof. vm_compute. reflexivity. Qed.
+
+Lemma parse_target_position_metadata_example :
+  parse_target_position_metadata
+    [ (key_classname, val_target_position)
+    ; (key_targetname, [112; 97; 100; 49])
+    ; (key_origin, [49; 50; 56; 32; 48; 32; 50; 53; 54])
+    ] =
+  Some (mk_target_position_metadata
+          [112; 97; 100; 49]
+          (mk_vec3 128 0 256)).
+Proof. vm_compute. reflexivity. Qed.
+
+Lemma find_target_position_origin_example :
+  find_target_position_origin
+    [ mk_target_position_metadata [112; 97; 100; 49] (mk_vec3 128 0 256) ]
+    [112; 97; 100; 49] =
+  Some (mk_vec3 128 0 256).
+Proof. vm_compute. reflexivity. Qed.
+
+Lemma initial_trigger_states_from_entities_example :
+  initial_trigger_states_from_entities
+    [ ( (key_classname, val_trigger_push)
+        :: (key_model, [42; 51])
+        :: (key_target, [112; 97; 100; 49])
+        :: nil )
+    ; ( (key_classname, val_target_position)
+        :: (key_targetname, [112; 97; 100; 49])
+        :: (key_origin, [49; 50; 56; 32; 48; 32; 50; 53; 54])
+        :: nil )
+    ] =
+  [mk_entity_state 0 3 (mk_vec3 128 0 256) true].
+Proof. vm_compute. reflexivity. Qed.
+
 (** An empty entity list has no spawn points. *)
 Lemma select_spawn_point_nil :
   select_spawn_point [] = None.
@@ -1211,6 +1535,33 @@ Proof.
   intros entities. unfold game_state_from_entities.
   destruct (select_spawn_point entities) as [[[px py pz] yaw] |];
     reflexivity.
+Qed.
+
+Lemma game_state_from_entities_entities : forall entities,
+  gs_entities (game_state_from_entities entities) =
+  initial_trigger_states_from_entities entities.
+Proof.
+  intros entities. unfold game_state_from_entities.
+  destruct (select_spawn_point entities) as [[[px py pz] yaw] |];
+    reflexivity.
+Qed.
+
+(** When a spawn point is found, the initial position comes from it. *)
+Lemma game_state_from_entities_position : forall entities pos yaw,
+  select_spawn_point entities = Some (pos, yaw) ->
+  gs_position (game_state_from_entities entities) = pos.
+Proof.
+  intros entities pos yaw Hspawn.
+  unfold game_state_from_entities. rewrite Hspawn. reflexivity.
+Qed.
+
+(** When a spawn point is found, the initial yaw comes from it. *)
+Lemma game_state_from_entities_yaw : forall entities pos yaw,
+  select_spawn_point entities = Some (pos, yaw) ->
+  gs_yaw (game_state_from_entities entities) = yaw.
+Proof.
+  intros entities pos yaw Hspawn.
+  unfold game_state_from_entities. rewrite Hspawn. reflexivity.
 Qed.
 
 (** The bridge helper always yields the five serialized camera values. *)
@@ -1283,16 +1634,30 @@ Qed.
 (** ** World-state serialization and frame stepping                    *)
 (* ------------------------------------------------------------------ *)
 
+(** Number of [Z] words produced per serialized [entity_state]. *)
+Definition entity_state_words_count : nat := 9.
+
 (** Number of [Z] words produced by [game_state_to_words] for a
     game state with an empty entity list. *)
-Definition game_state_words_count : nat := 18.
+Definition game_state_words_count : nat := 19.
+
+Definition entity_state_to_words (es : entity_state) : list Z :=
+  [es_entity_index es; es_model_index es] ++
+  q_words (v3_x (es_origin es)) ++
+  q_words (v3_y (es_origin es)) ++
+  q_words (v3_z (es_origin es)) ++
+  [if es_active es then 1 else 0].
+
+Fixpoint entity_states_to_words (entities : list entity_state) : list Z :=
+  match entities with
+  | [] => []
+  | es :: rest => entity_state_to_words es ++ entity_states_to_words rest
+  end.
 
 (** Serialize a [game_state] to a flat [list Z] suitable for
-    round-tripping through the JS bridge.  The entity list is
-    omitted; v1 entities carry no per-step dynamic state that
-    needs crossing the bridge boundary.
+    round-tripping through the JS bridge.
 
-    Word layout (18 entries):
+    Word layout (19 + 9 * entity_count entries):
     <<
        0  px_num   1  px_den
        2  py_num   3  py_den
@@ -1304,6 +1669,8 @@ Definition game_state_words_count : nat := 18.
       14 pch_num  15 pch_den
       16 on_ground          (0 = airborne, 1 = grounded)
       17 tick
+      18 entity_count
+      19... serialized entity states
     >>
 *)
 Definition game_state_to_words (gs : game_state) : list Z :=
@@ -1316,34 +1683,92 @@ Definition game_state_to_words (gs : game_state) : list Z :=
   q_words (gs_yaw gs) ++
   q_words (gs_pitch gs) ++
   [(if gs_on_ground gs then 1 else 0)] ++
-  [gs_tick gs].
+  [gs_tick gs] ++
+  [Z.of_nat (length (gs_entities gs))] ++
+  entity_states_to_words (gs_entities gs).
+
+Definition entity_state_from_words (ws : list Z)
+    : option (entity_state * list Z) :=
+  match ws with
+  | [entity_index; model_index;
+     ox_n; ox_d; oy_n; oy_d; oz_n; oz_d;
+     active] =>
+      if (ox_d <=? 0) || (oy_d <=? 0) || (oz_d <=? 0)
+      then None
+      else
+        Some
+          ( mk_entity_state
+              entity_index
+              model_index
+              (mk_vec3 (Qmake ox_n (Z.to_pos ox_d))
+                       (Qmake oy_n (Z.to_pos oy_d))
+                       (Qmake oz_n (Z.to_pos oz_d)))
+              (negb (active =? 0))
+          , []
+          )
+  | entity_index :: model_index ::
+    ox_n :: ox_d :: oy_n :: oy_d :: oz_n :: oz_d :: active :: rest =>
+      if (ox_d <=? 0) || (oy_d <=? 0) || (oz_d <=? 0)
+      then None
+      else
+        Some
+          ( mk_entity_state
+              entity_index
+              model_index
+              (mk_vec3 (Qmake ox_n (Z.to_pos ox_d))
+                       (Qmake oy_n (Z.to_pos oy_d))
+                       (Qmake oz_n (Z.to_pos oz_d)))
+              (negb (active =? 0))
+          , rest
+          )
+  | _ => None
+  end.
+
+Fixpoint entity_states_from_words_aux (count : nat) (ws : list Z)
+    : option (list entity_state * list Z) :=
+  match count with
+  | O => Some ([], ws)
+  | S count' =>
+      match entity_state_from_words ws with
+      | Some (es, rest) =>
+          match entity_states_from_words_aux count' rest with
+          | Some (entities, tail) => Some (es :: entities, tail)
+          | None => None
+          end
+      | None => None
+      end
+  end.
 
 (** Reconstruct a [game_state] from the word list produced by
     [game_state_to_words].  Returns [None] on a malformed list or
     any zero/negative denominator. *)
 Definition game_state_from_words (ws : list Z) : option game_state :=
   match ws with
-  | [px_n; px_d; py_n; py_d; pz_n; pz_d;
-     vx_n; vx_d; vy_n; vy_d; vz_n; vz_d;
-     yaw_n; yaw_d; pitch_n; pitch_d;
-     on_ground; tick] =>
+  | px_n :: px_d :: py_n :: py_d :: pz_n :: pz_d ::
+    vx_n :: vx_d :: vy_n :: vy_d :: vz_n :: vz_d ::
+    yaw_n :: yaw_d :: pitch_n :: pitch_d ::
+    on_ground :: tick :: entity_count :: entity_words =>
       if (px_d <=? 0) || (py_d <=? 0) || (pz_d <=? 0) ||
-         (vx_d <=? 0) || (vy_d <=? 0) || (vz_d <=? 0) ||
-         (yaw_d <=? 0) || (pitch_d <=? 0)
+          (vx_d <=? 0) || (vy_d <=? 0) || (vz_d <=? 0) ||
+          (yaw_d <=? 0) || (pitch_d <=? 0) || (entity_count <? 0)
       then None
       else
-        Some (mk_game_state
-          (mk_vec3 (Qmake px_n (Z.to_pos px_d))
-                   (Qmake py_n (Z.to_pos py_d))
-                   (Qmake pz_n (Z.to_pos pz_d)))
-          (mk_vec3 (Qmake vx_n (Z.to_pos vx_d))
-                   (Qmake vy_n (Z.to_pos vy_d))
-                   (Qmake vz_n (Z.to_pos vz_d)))
-          (Qmake yaw_n   (Z.to_pos yaw_d))
-          (Qmake pitch_n (Z.to_pos pitch_d))
-          (negb (on_ground =? 0))
-          []
-          tick)
+        match entity_states_from_words_aux (Z.to_nat entity_count) entity_words with
+        | Some (entities, []) =>
+            Some (mk_game_state
+              (mk_vec3 (Qmake px_n (Z.to_pos px_d))
+                       (Qmake py_n (Z.to_pos py_d))
+                       (Qmake pz_n (Z.to_pos pz_d)))
+              (mk_vec3 (Qmake vx_n (Z.to_pos vx_d))
+                       (Qmake vy_n (Z.to_pos vy_d))
+                       (Qmake vz_n (Z.to_pos vz_d)))
+              (Qmake yaw_n   (Z.to_pos yaw_d))
+              (Qmake pitch_n (Z.to_pos pitch_d))
+              (negb (on_ground =? 0))
+              entities
+              tick)
+        | _ => None
+        end
   | _ => None
   end.
 
@@ -1450,19 +1875,31 @@ Definition step_world_in_world
   let '(position, vertical_blocked) :=
     resolve_motion_substeps world horizontal_pos vertical_delta in
   let landed := vertical_blocked && qleb desired_vel_z 0 in
-  let on_ground := landed || grounded_by_worldb world position in
-  let velocity :=
+  let base_on_ground := landed || grounded_by_worldb world position in
+  let base_velocity :=
     mk_vec3
       (if horizontal_blocked then 0 else v3_x desired_planar)
       (if horizontal_blocked then 0 else v3_y desired_planar)
       (if vertical_blocked then 0 else desired_vel_z) in
+  let '(trigger_impulse, entities) :=
+    apply_trigger_pushes world position (gs_entities gs) in
+  let velocity :=
+    match trigger_impulse with
+    | Some impulse => impulse
+    | None => base_velocity
+    end in
+  let on_ground :=
+    match trigger_impulse with
+    | Some _ => false
+    | None => base_on_ground
+    end in
   mk_game_state
     position
     velocity
     yaw
     pitch
     on_ground
-    (gs_entities gs)
+    entities
     (gs_tick gs + 1).
 
 (** Bridge-facing word-level entry point for per-frame stepping.
@@ -1497,11 +1934,34 @@ Definition initial_game_state_words_from_entities
 (** ** Correctness lemmas for world stepping                           *)
 (* ------------------------------------------------------------------ *)
 
-Lemma game_state_to_words_length : forall gs,
-  length (game_state_to_words gs) = game_state_words_count.
+Lemma entity_state_to_words_length : forall es,
+  length (entity_state_to_words es) = entity_state_words_count.
 Proof.
-  intros gs. unfold game_state_to_words, q_words, game_state_words_count.
+  intros es. unfold entity_state_to_words, q_words, entity_state_words_count.
   repeat rewrite length_app. simpl. reflexivity.
+Qed.
+
+Lemma entity_states_to_words_length : forall entities,
+  length (entity_states_to_words entities) =
+  (entity_state_words_count * length entities)%nat.
+Proof.
+  induction entities as [| es rest IH]; simpl.
+  - reflexivity.
+  - destruct es as [entity_index model_index origin active].
+    destruct origin as [ox oy oz].
+    unfold entity_state_words_count in *. simpl in *.
+    rewrite IH. lia.
+Qed.
+
+Lemma game_state_to_words_length : forall gs,
+  length (game_state_to_words gs) =
+  (game_state_words_count +
+   entity_state_words_count * length (gs_entities gs))%nat.
+Proof.
+  intros [[px py pz] [vx vy vz] yaw pitch grounded entities tick].
+  unfold game_state_to_words, q_words, game_state_words_count, entity_state_words_count.
+  simpl.
+  rewrite entity_states_to_words_length. reflexivity.
 Qed.
 
 (** Stepping integrates position from the per-frame velocity. *)
@@ -1610,28 +2070,56 @@ Proof.
   intro p. apply Z.leb_gt. apply Pos2Z.is_pos.
 Qed.
 
-(** [game_state_to_words] round-trips through [game_state_from_words]
-    for states with an empty entity list. *)
+(** [entity_state_to_words] round-trips through [entity_state_from_words]
+    with any trailing payload preserved. *)
+Lemma entity_state_roundtrip : forall es tail,
+  entity_state_from_words (entity_state_to_words es ++ tail) =
+  Some (es, tail).
+Proof.
+  intros [entity_index model_index [ox oy oz] active] tail.
+  destruct ox as [oxn oxd], oy as [oyn oyd], oz as [ozn ozd].
+  unfold entity_state_to_words, entity_state_from_words, q_words. simpl.
+  destruct tail as [| z tail']; repeat rewrite Z_pos_leb_0; simpl;
+    destruct active; reflexivity.
+Qed.
+
+Lemma entity_states_roundtrip : forall entities,
+  entity_states_from_words_aux (length entities) (entity_states_to_words entities) =
+  Some (entities, []).
+Proof.
+  induction entities as [| es rest IH].
+  - reflexivity.
+  - cbn [length entity_states_from_words_aux entity_states_to_words].
+    rewrite entity_state_roundtrip.
+    rewrite IH. reflexivity.
+Qed.
+
+(** [game_state_to_words] round-trips through [game_state_from_words]. *)
 Lemma game_state_roundtrip : forall gs,
-  gs_entities gs = [] ->
   game_state_from_words (game_state_to_words gs) = Some gs.
 Proof.
-  intros gs Hnil.
+  intros gs.
   destruct gs as [[px py pz] [vx vy vz] yaw pitch grounded ents tick].
-  simpl in Hnil. subst ents.
   (* Destruct each Q into num/den so Z.to_pos (Z.pos den) = den by reflexivity. *)
   destruct px as [pxn pxd], py as [pyn pyd], pz as [pzn pzd].
   destruct vx as [vxn vxd], vy as [vyn vyd], vz as [vzn vzd].
   destruct yaw as [yn yd], pitch as [pn pd].
   unfold game_state_to_words, game_state_from_words, q_words. simpl.
   repeat rewrite Z_pos_leb_0. simpl.
+  assert ((Z.of_nat (length ents) <? 0) = false) as Hcount.
+  { apply Z.ltb_ge. lia. }
+  rewrite Hcount. simpl.
+  rewrite Nat2Z.id.
+  rewrite entity_states_roundtrip.
   destruct grounded; reflexivity.
 Qed.
 
-(** Serialized word count matches [game_state_words_count]. *)
+(** Serialized word count includes the per-entity payload. *)
 Lemma initial_game_state_words_from_entities_length : forall entities,
   length (initial_game_state_words_from_entities entities) =
-  game_state_words_count.
+  (game_state_words_count +
+   entity_state_words_count *
+   length (gs_entities (game_state_from_entities entities)))%nat.
 Proof.
   intros entities. unfold initial_game_state_words_from_entities.
   apply game_state_to_words_length.
@@ -1650,10 +2138,11 @@ Definition sample_floor_world : collision_world_input :=
     ; mk_collision_plane_input (-1)   0    0 1024
     ; mk_collision_plane_input   0    1    0 1024
     ; mk_collision_plane_input   0  (-1)   0 1024
-    ; mk_collision_plane_input   0    0    1    0
-    ; mk_collision_plane_input   0    0  (-1)  64
-    ]
+     ; mk_collision_plane_input   0    0    1    0
+     ; mk_collision_plane_input   0    0  (-1)  64
+     ]
     [sample_solid_texture]
+    []
     [mk_collision_brush_input 0 6 0]
     [ mk_collision_brush_side_input 0
     ; mk_collision_brush_side_input 1
@@ -1669,10 +2158,31 @@ Definition sample_wall_world : collision_world_input :=
     ; mk_collision_plane_input (-1)   0    0  (-32)
     ; mk_collision_plane_input   0    1    0 1024
     ; mk_collision_plane_input   0  (-1)   0 1024
-    ; mk_collision_plane_input   0    0    1 1024
-    ; mk_collision_plane_input   0    0  (-1) 1024
-    ]
+     ; mk_collision_plane_input   0    0    1 1024
+     ; mk_collision_plane_input   0    0  (-1) 1024
+     ]
     [sample_solid_texture]
+    []
+    [mk_collision_brush_input 0 6 0]
+    [ mk_collision_brush_side_input 0
+    ; mk_collision_brush_side_input 1
+    ; mk_collision_brush_side_input 2
+    ; mk_collision_brush_side_input 3
+    ; mk_collision_brush_side_input 4
+    ; mk_collision_brush_side_input 5
+    ].
+
+Definition sample_trigger_world : collision_world_input :=
+  mk_collision_world_input
+    [ mk_collision_plane_input   1    0    0   32
+    ; mk_collision_plane_input (-1)   0    0   32
+    ; mk_collision_plane_input   0    1    0   32
+    ; mk_collision_plane_input   0  (-1)   0   32
+    ; mk_collision_plane_input   0    0    1    0
+    ; mk_collision_plane_input   0    0  (-1)  64
+    ]
+    []
+    [mk_collision_model_input 0 1]
     [mk_collision_brush_input 0 6 0]
     [ mk_collision_brush_side_input 0
     ; mk_collision_brush_side_input 1
@@ -1714,3 +2224,67 @@ Proof. vm_compute. reflexivity. Qed.
 Lemma point_collides_worldb_sample_wall :
   point_collides_worldb sample_wall_world (mk_vec3 16 0 128) = true.
 Proof. vm_compute. reflexivity. Qed.
+
+Lemma point_collides_modelb_sample_trigger :
+  point_collides_modelb sample_trigger_world (mk_vec3 0 0 16)
+    (mk_collision_model_input 0 1) = true.
+Proof. vm_compute. reflexivity. Qed.
+
+Lemma apply_trigger_pushes_single_outside : forall world pos es,
+  entity_inside_trigger_modelb world pos es = false ->
+  apply_trigger_pushes world pos [es] =
+  (None,
+   [mk_entity_state
+      (es_entity_index es)
+      (es_model_index es)
+      (es_origin es)
+      true]).
+Proof.
+  intros world pos [entity_index model_index [ox oy oz] active] Hinside.
+  simpl in *. rewrite Hinside. destruct active; reflexivity.
+Qed.
+
+Lemma apply_trigger_pushes_single_inside_active : forall world pos es,
+  entity_inside_trigger_modelb world pos es = true ->
+  es_active es = true ->
+  apply_trigger_pushes world pos [es] =
+  (Some (trigger_push_velocity pos (es_origin es)),
+   [mk_entity_state
+      (es_entity_index es)
+      (es_model_index es)
+      (es_origin es)
+      false]).
+Proof.
+  intros world pos [entity_index model_index [ox oy oz] active] Hinside Hactive.
+  simpl in *. subst active. rewrite Hinside. reflexivity.
+Qed.
+
+Lemma apply_trigger_pushes_single_inside_inactive : forall world pos es,
+  entity_inside_trigger_modelb world pos es = true ->
+  es_active es = false ->
+  apply_trigger_pushes world pos [es] =
+  (None,
+   [mk_entity_state
+      (es_entity_index es)
+      (es_model_index es)
+      (es_origin es)
+      false]).
+Proof.
+  intros world pos [entity_index model_index [ox oy oz] active] Hinside Hactive.
+  simpl in *. subst active. rewrite Hinside. reflexivity.
+Qed.
+
+Lemma step_world_in_world_trigger_push_example :
+  let stepped :=
+    step_world_in_world sample_trigger_world
+      (mk_game_state
+         (mk_vec3 0 0 16)
+         vec3_zero
+         0 0 false
+         [mk_entity_state 0 0 (mk_vec3 0 0 256) true]
+         0)
+      input_snapshot_zero in
+  v3_z (gs_velocity stepped) == 640 /\
+  gs_on_ground stepped = false /\
+  gs_entities stepped = [mk_entity_state 0 0 (mk_vec3 0 0 256) false].
+Proof. vm_compute. repeat split; reflexivity. Qed.

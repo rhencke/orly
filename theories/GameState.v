@@ -2,7 +2,8 @@
 
     Defines the per-tick data types that flow between the JavaScript
     browser shell and the Rocq game core, as specified in
-    ARCHITECTURE.md:
+    ARCHITECTURE.md.  These records are the data payloads carried by the
+    minimal JS-to-Rocq struct-of-functions bridge:
 
     - [input_snapshot]: packed input state sent from JS each tick
       (key/button flags, mouse/touch deltas, delta time).
@@ -14,6 +15,10 @@
     - [render_snapshot]: the per-frame output Rocq sends to JS —
       camera transform, visible surface list, entity positions.
       JavaScript uses this to issue WebGL draw calls.
+
+    The function side of that bridge stays intentionally tiny:
+    [load_world], [step], and [reset].  The records in this file are the
+    only game-data payloads those functions should exchange.
 
     All spatial quantities use [Q] rationals, matching the BSP parser
     conventions in [BspPlaneVertex].  Angles are in degrees (Q). *)

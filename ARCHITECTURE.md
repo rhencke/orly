@@ -127,21 +127,58 @@ logical boundary entirely.
 
 ## The JS-to-Rocq bridge
 
-Communication between JavaScript and Rocq flows through JsCoq's
-messaging interface.  The bridge protocol is:
+The bridge must stay **sqlite-small**: one versioned struct of functions,
+plain data records, and one implementation module that hides the
+JsCoq-specific eval plumbing from the rest of the browser code.
 
-1. **JS -> Rocq (per tick):** input snapshot (key/button state, mouse/touch
-   deltas, delta time).
-2. **Rocq -> JS (per tick):** render snapshot (camera transform, visible
-   surfaces, entity transforms).
-3. **JS -> Rocq (on load):** raw asset bytes (BSP file, texture data).
-4. **Rocq -> JS (on parse):** confirmation or error; Rocq retains the
-   parsed structures internally.
+The browser shell should depend on a bridge shaped like this:
 
-The exact serialization format will be defined when the rendering
-pipeline lands (issues #15, #22, #23).  The architectural constraint is:
-**all game-logic-relevant data flows through Rocq, and JavaScript only
-reads render output — it never computes game state independently.**
+```text
+bridge_v1 =
+  { version    : 1
+  ; load_world : bsp_bytes -> render_snapshot
+  ; step       : input_snapshot -> render_snapshot
+  ; reset      : unit -> render_snapshot
+  }
+```
+
+Where:
+
+- [load_world] is called once after JavaScript fetches the BSP bytes.
+  Rocq parses the BSP, selects the spawn point, builds the authoritative
+  world/game state, and returns the first [render_snapshot].
+- [step] is called once per animation-frame tick.  JavaScript passes the
+  current [input_snapshot]; Rocq advances the authoritative state and
+  returns the next [render_snapshot].
+- [reset] restores the initial state for the currently loaded world and
+  returns its initial [render_snapshot].  This keeps restart logic out of
+  JavaScript and avoids reparsing when only the dynamic state should be
+  rewound.
+
+The payload types are the Rocq records in [theories/GameState.v]:
+[input_snapshot] for JS -> Rocq and [render_snapshot] for Rocq -> JS.
+They should stay boring: flat numbers, booleans, and lists that can be
+serialized without a generic RPC layer.
+
+This is intentionally **not** a general foreign-function interface.  In
+particular, the bridge must not grow:
+
+- a JS callback registry that Rocq can invoke arbitrarily;
+- per-feature "helper" methods for camera math, collision probes, or
+  renderer decisions that duplicate Rocq-owned logic;
+- raw access to Rocq internals from random browser modules;
+- texture, shader, or WebGL resources crossing the boundary unless they
+  become logically necessary for Rocq itself.
+
+Implementation rule: all stringly-typed interaction with the JsCoq eval
+API lives in one JavaScript bridge module.  The rest of `docs/` should
+see only the struct-of-functions above.  If a new gameplay need appears,
+prefer extending the Rocq data model behind [load_world]/[step]/[reset]
+before adding another bridge entry point.
+
+The core architectural constraint remains: **all game-logic-relevant data
+flows through Rocq, and JavaScript only reads render output — it never
+computes game state independently.**
 
 ## JsCoq as part of the shipped experience
 

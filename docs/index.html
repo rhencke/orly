@@ -596,6 +596,48 @@
       return normalizeErrorReport(value, fallback).message;
     }
 
+    const DEFAULT_BUILD_INFO = Object.freeze({
+      version: '1.0.0',
+      gitSha: 'unknown',
+      builtAt: 'unknown',
+      source: 'checked-in-default',
+    });
+
+    function normalizeBuildInfo(value) {
+      if (typeof value !== 'object' || value === null) return null;
+      const buildInfo = {
+        version: firstNonEmptyText(value.version, DEFAULT_BUILD_INFO.version),
+        gitSha: firstNonEmptyText(value.gitSha, DEFAULT_BUILD_INFO.gitSha),
+        builtAt: firstNonEmptyText(value.builtAt, DEFAULT_BUILD_INFO.builtAt),
+        source: firstNonEmptyText(value.source, DEFAULT_BUILD_INFO.source),
+      };
+      const loadError = firstNonEmptyText(value.loadError);
+      if (loadError.length > 0) buildInfo.loadError = loadError;
+      return buildInfo;
+    }
+
+    function currentBuildInfo() {
+      const buildInfo = normalizeBuildInfo(window.orlyBuildInfo);
+      return buildInfo ? { ...buildInfo } : { ...DEFAULT_BUILD_INFO };
+    }
+
+    async function loadBuildInfo() {
+      const buildInfoUrl = new URL('./build-info.json', window.location.href);
+      try {
+        const resp = await fetch(buildInfoUrl);
+        if (!resp.ok) throw new Error(`build metadata fetch failed: HTTP ${resp.status}`);
+        const buildInfo = normalizeBuildInfo(await resp.json());
+        if (!buildInfo) throw new Error('build metadata payload is not an object');
+        return buildInfo;
+      } catch (err) {
+        return {
+          ...DEFAULT_BUILD_INFO,
+          source: 'fallback',
+          loadError: errorDetail(err),
+        };
+      }
+    }
+
     function clearErrorReport() {
       window.orlyErrorReport = null;
     }
@@ -612,6 +654,7 @@
         title: textOrEmpty(title),
         status: textOrEmpty(status),
         capturedAt: new Date().toISOString(),
+        build: currentBuildInfo(),
         ...normalizeErrorReport(error, fallback),
       };
       window.orlyErrorReport = report;
@@ -651,6 +694,7 @@
       statusBar.textContent = '';
     }
 
+    window.orlyBuildInfo = await loadBuildInfo();
     clearErrorReport();
 
     const GAME_TICK_MS = 16;

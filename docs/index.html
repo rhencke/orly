@@ -373,6 +373,7 @@
 
     /* ── lower panel shell ─────────────────────────────────────── */
     #jscoq-panel {
+      --jscoq-toolbar-height: 42px;
       /* svh: stable viewport height — doesn't shift when mobile
          browser chrome appears/disappears during scroll */
       flex: 0 0 57svh;
@@ -407,29 +408,38 @@
     #lower-panel-header {
       display: flex;
       flex-direction: column;
-      gap: 0.2rem;
+      gap: 0.3rem;
     }
 
     #lower-panel-label {
+      display: inline-flex;
+      align-items: center;
+      align-self: flex-start;
+      padding: 0.22rem 0.55rem;
+      border: 1px solid rgb(160 196 255 / 18%);
+      border-radius: 999px;
+      background: rgb(12 19 36 / 78%);
       font-size: 0.72rem;
       font-weight: 700;
       letter-spacing: 0.12em;
       text-transform: uppercase;
       color: #8fb2ff;
+      box-shadow: inset 0 0 0 1px rgb(255 255 255 / 3%);
     }
 
     #lower-panel-title {
-      font-size: 1rem;
+      font-size: 1.05rem;
       font-weight: 600;
-      line-height: 1.25;
+      line-height: 1.2;
+      letter-spacing: -0.01em;
       color: #f4f7ff;
     }
 
     #lower-panel-copy {
       max-width: 34rem;
-      font-size: 0.82rem;
+      font-size: 0.83rem;
       line-height: 1.45;
-      color: #aebbd6;
+      color: #c1cde5;
       display: none;
     }
 
@@ -440,20 +450,25 @@
     #lower-panel-focus {
       display: flex;
       flex-direction: column;
-      gap: 0.3rem;
+      gap: 0.4rem;
+      padding: 0.45rem;
+      border: 1px solid rgb(160 196 255 / 14%);
+      border-radius: 1rem;
+      background: linear-gradient(180deg, rgb(13 20 37 / 92%), rgb(8 13 25 / 96%));
+      box-shadow: inset 0 0 0 1px rgb(255 255 255 / 2%);
     }
 
     #lower-panel-focus-label {
-      font-size: 0.68rem;
+      font-size: 0.66rem;
       font-weight: 700;
       letter-spacing: 0.1em;
       text-transform: uppercase;
-      color: #7f96c4;
+      color: #90a7d3;
     }
 
     #lower-panel-section-switcher {
       display: flex;
-      gap: 0.35rem;
+      gap: 0.45rem;
       overflow-x: auto;
       scrollbar-width: none;
     }
@@ -464,34 +479,47 @@
 
     .lower-panel-section-button {
       flex: 0 0 auto;
-      min-height: 2rem;
-      padding: 0.35rem 0.75rem;
-      border: 1px solid rgb(160 196 255 / 18%);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 2.4rem;
+      padding: 0.45rem 0.9rem;
+      border: 1px solid rgb(160 196 255 / 22%);
       border-radius: 999px;
-      background: rgb(12 17 31 / 78%);
-      color: #b8c6e4;
+      background: linear-gradient(180deg, rgb(18 27 48 / 96%), rgb(10 16 30 / 96%));
+      color: #c6d3ec;
       font: inherit;
-      font-size: 0.78rem;
+      font-size: 0.8rem;
       font-weight: 600;
       line-height: 1.1;
       cursor: pointer;
+      box-shadow:
+        inset 0 0 0 1px rgb(255 255 255 / 3%),
+        0 8px 18px rgb(0 0 0 / 18%);
       transition:
         background-color 0.15s ease,
         border-color 0.15s ease,
         color 0.15s ease,
-        box-shadow 0.15s ease;
+        box-shadow 0.15s ease,
+        transform 0.15s ease;
     }
 
     .lower-panel-section-button:hover:not(:disabled) {
       border-color: rgb(160 196 255 / 34%);
       color: #edf3ff;
+      box-shadow:
+        inset 0 0 0 1px rgb(255 255 255 / 5%),
+        0 10px 22px rgb(0 0 0 / 22%);
     }
 
     .lower-panel-section-button.is-active {
       border-color: rgb(160 196 255 / 48%);
       background: linear-gradient(180deg, rgb(55 90 158 / 95%), rgb(36 61 109 / 95%));
       color: #fff;
-      box-shadow: 0 0 0 1px rgb(160 196 255 / 16%);
+      box-shadow:
+        0 0 0 1px rgb(160 196 255 / 16%),
+        0 10px 24px rgb(19 46 92 / 30%);
+      transform: translateY(-1px);
     }
 
     .lower-panel-section-button:focus-visible {
@@ -499,9 +527,14 @@
       outline-offset: 2px;
     }
 
+    .lower-panel-section-button:active:not(:disabled) {
+      transform: translateY(0);
+    }
+
     .lower-panel-section-button:disabled {
       opacity: 0.55;
       cursor: default;
+      box-shadow: none;
     }
 
     #lower-panel-frame {
@@ -509,7 +542,7 @@
       min-height: 0;
       display: flex;
       flex-direction: column;
-      border: 1px solid rgb(160 196 255 / 16%);
+      border: 1px solid rgb(160 196 255 / 20%);
       border-radius: 1rem;
       background: #f7f9ff;
       box-shadow: 0 14px 30px rgb(0 0 0 / 26%);
@@ -572,7 +605,7 @@
       display: flex;
       align-items: center;
       gap: 0.4rem;
-      height: 42px;
+      height: var(--jscoq-toolbar-height);
       padding: 0 0.45rem;
       border-bottom: 1px solid #d7deef;
       background: linear-gradient(180deg, #fdfdff, #eef3ff);
@@ -608,41 +641,65 @@
     }
 
     #jscoq-panel #buttons button {
-      width: 28px;
-      height: 28px;
-      border-radius: 0.7rem;
+      width: 32px;
+      height: 32px;
+      border-radius: 0.8rem;
+      border: 1px solid rgb(19 38 79 / 12%);
       background-color: #f7f9ff;
       background-position: center;
       background-repeat: no-repeat;
       background-size: 72%;
-      box-shadow: inset 0 0 0 1px rgb(19 38 79 / 10%);
+      box-shadow:
+        inset 0 0 0 1px rgb(255 255 255 / 5%),
+        0 1px 2px rgb(19 38 79 / 8%);
+      transition:
+        background-color 0.15s ease,
+        border-color 0.15s ease,
+        box-shadow 0.15s ease,
+        transform 0.15s ease;
+    }
+
+    #jscoq-panel #buttons button:hover,
+    #jscoq-panel #buttons button:focus-visible {
+      background-color: #fff;
+      border-color: rgb(73 100 146 / 24%);
+      box-shadow:
+        inset 0 0 0 1px rgb(255 255 255 / 6%),
+        0 4px 10px rgb(73 100 146 / 16%);
+    }
+
+    #jscoq-panel #buttons button:active {
+      transform: translateY(1px);
     }
 
     #jscoq-panel #toolbar svg.app-menu-button {
-      width: 30px;
-      height: 30px;
-      padding: 0.2rem;
-      border-radius: 0.7rem;
+      width: 32px;
+      height: 32px;
+      padding: 0.28rem;
+      border: 1px solid rgb(19 38 79 / 12%);
+      border-radius: 0.8rem;
+      background: #f7f9ff;
       fill: #496492;
     }
 
     #jscoq-panel .flex-container {
-      height: calc(100% - 42px);
+      height: calc(100% - var(--jscoq-toolbar-height));
     }
 
     #jscoq-panel .flex-panel > .caption {
-      flex-basis: 28px;
-      min-height: 28px;
-      padding: 0.45rem 1.8rem 0.35rem 0.75rem;
-      font-size: 0.75rem;
+      flex-basis: 32px;
+      min-height: 32px;
+      padding: 0.5rem 1.95rem 0.4rem 0.75rem;
+      font-size: 0.76rem;
       font-weight: 600;
       letter-spacing: 0.03em;
       text-transform: uppercase;
-      background: #e8eef9;
+      color: #29426d;
+      background: linear-gradient(180deg, #edf2fb, #e2eaf8);
     }
 
     #jscoq-panel .flex-panel > .caption:after {
-      top: 6px;
+      top: 8px;
       right: 9px;
       border-top-width: 6px;
       border-right-width: 6px;
@@ -755,7 +812,8 @@
       #lower-panel-focus {
         flex-direction: row;
         align-items: center;
-        gap: 0.2rem;
+        gap: 0.18rem;
+        padding: 0.2rem;
       }
 
       #lower-panel-focus-label {
@@ -769,9 +827,30 @@
       }
 
       .lower-panel-section-button {
-        min-height: 1.75rem;
-        padding: 0.25rem 0.55rem;
+        min-height: 2rem;
+        padding: 0.22rem 0.5rem;
+        font-size: 0.7rem;
+      }
+
+      #jscoq-panel {
+        --jscoq-toolbar-height: 40px;
+      }
+
+      #jscoq-panel #buttons button,
+      #jscoq-panel #toolbar svg.app-menu-button {
+        width: 30px;
+        height: 30px;
+      }
+
+      #jscoq-panel .flex-panel > .caption {
+        flex-basis: 36px;
+        min-height: 36px;
+        padding: 0.5rem 1.85rem 0.35rem 0.72rem;
         font-size: 0.72rem;
+      }
+
+      #jscoq-panel .flex-panel > .caption:after {
+        top: 10px;
       }
 
       #game-hint {
@@ -846,13 +925,12 @@
         height: 6px;
       }
 
-      #lower-panel-shell {
-        gap: 0.45rem;
-        padding: 0.45rem;
+      #lower-panel-header {
+        gap: 0.08rem;
       }
 
-      #lower-panel-header {
-        gap: 0.15rem;
+      #lower-panel-label {
+        display: none;
       }
 
       #lower-panel-title {
@@ -861,20 +939,47 @@
 
       #lower-panel-focus {
         gap: 0.2rem;
+        padding: 0.2rem;
       }
 
       #lower-panel-focus-label {
-        font-size: 0.64rem;
+        display: none;
       }
 
       #lower-panel-section-switcher {
-        gap: 0.25rem;
+        gap: 0.2rem;
       }
 
       .lower-panel-section-button {
-        min-height: 1.85rem;
-        padding: 0.3rem 0.65rem;
-        font-size: 0.74rem;
+        min-height: 2.75rem;
+        padding: 0.45rem 0.95rem;
+        font-size: 0.82rem;
+      }
+
+      #jscoq-panel {
+        --jscoq-toolbar-height: 42px;
+      }
+
+      #jscoq-panel #buttons button,
+      #jscoq-panel #toolbar svg.app-menu-button {
+        width: 36px;
+        height: 36px;
+      }
+
+      #jscoq-panel #buttons button {
+        background-size: 66%;
+      }
+
+      #jscoq-panel .flex-panel > .caption {
+        flex-basis: 44px;
+        min-height: 44px;
+        padding: 0.72rem 2rem 0.52rem 0.85rem;
+        font-size: 0.8rem;
+      }
+
+      #jscoq-panel .flex-panel > .caption:after {
+        top: 14px;
+        right: 12px;
       }
     }
   </style>

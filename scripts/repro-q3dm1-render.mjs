@@ -285,6 +285,10 @@ async function gatherSnapshot(page) {
       window.orlyRocqSyncDiagnostics && typeof window.orlyRocqSyncDiagnostics === 'object'
         ? structuredClone(window.orlyRocqSyncDiagnostics)
         : null;
+    const bspParseDiagnostics =
+      window.orlyBspParseDiagnostics && typeof window.orlyBspParseDiagnostics === 'object'
+        ? structuredClone(window.orlyBspParseDiagnostics)
+        : null;
 
     function rectOf(element) {
       if (!element) return null;
@@ -441,6 +445,7 @@ async function gatherSnapshot(page) {
       },
       buildInfo,
       errorReport,
+      bspParseDiagnostics,
       rocqSyncDiagnostics,
       assetCount: assetMap?.size ?? null,
       jscoqLoaded: Boolean(document.querySelector('.CodeMirror')),

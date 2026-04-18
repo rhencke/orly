@@ -772,6 +772,7 @@
     const COPY_BUTTON_LABEL = 'Copy';
     const COPY_BUTTON_COPIED_LABEL = 'Copied!';
     const DEFAULT_ROCQ_SYNC_TIMEOUT_MS = 15000;
+    const MAX_BSP_PARSE_EVENT_HISTORY = 24;
     const MAX_ROCQ_SYNC_EVENT_HISTORY = 8;
     let copyFeedbackTimeoutId = null;
 
@@ -863,6 +864,168 @@
 
     function errorDetail(value, fallback = 'Unknown error') {
       return normalizeErrorReport(value, fallback).message;
+    }
+
+    function summarizeBspForParseDiagnostics(bsp) {
+      return {
+        entityCount: Array.isArray(bsp?.entities) ? bsp.entities.length : 0,
+        textureCount: Array.isArray(bsp?.textures) ? bsp.textures.length : 0,
+        planeCount: Array.isArray(bsp?.planes) ? bsp.planes.length : 0,
+        nodeCount: Array.isArray(bsp?.nodes) ? bsp.nodes.length : 0,
+        leafCount: Array.isArray(bsp?.leaves) ? bsp.leaves.length : 0,
+        modelCount: Array.isArray(bsp?.models) ? bsp.models.length : 0,
+        brushCount: Array.isArray(bsp?.brushes) ? bsp.brushes.length : 0,
+        brushSideCount: Array.isArray(bsp?.brushSides) ? bsp.brushSides.length : 0,
+        vertexCount: Array.isArray(bsp?.vertices) ? bsp.vertices.length : 0,
+        meshVertCount: Number.isInteger(bsp?.meshVerts?.length) ? bsp.meshVerts.length : 0,
+        effectCount: Array.isArray(bsp?.effects) ? bsp.effects.length : 0,
+        faceCount: Array.isArray(bsp?.faces) ? bsp.faces.length : 0,
+        lightmapCount: Array.isArray(bsp?.lightmaps) ? bsp.lightmaps.length : 0,
+        visClusterCount: Number.isInteger(bsp?.visData?.numClusters) ? bsp.visData.numClusters : 0,
+      };
+    }
+
+    function cloneBspParseEvent(value) {
+      if (typeof value !== 'object' || value === null) return null;
+      const payload = value.payload;
+      return {
+        stage: firstNonEmptyText(value.stage, 'unknown'),
+        at: firstNonEmptyText(value.at),
+        payload:
+          typeof payload === 'object' && payload !== null
+            ? JSON.parse(JSON.stringify(payload))
+            : payload ?? null,
+      };
+    }
+
+    function cloneBspParseDiagnostics(value = window.orlyBspParseDiagnostics) {
+      if (typeof value !== 'object' || value === null) return null;
+      const summary =
+        typeof value.summary === 'object' && value.summary !== null
+          ? { ...value.summary }
+          : null;
+      const lastEvent = cloneBspParseEvent(value.lastEvent);
+      const events = Array.isArray(value.events)
+        ? value.events.map(cloneBspParseEvent).filter(Boolean)
+        : [];
+      return {
+        state: firstNonEmptyText(value.state, 'idle'),
+        mapLabel: firstNonEmptyText(value.mapLabel),
+        bufferByteLength: Number.isFinite(value.bufferByteLength)
+          ? Math.max(0, Math.round(value.bufferByteLength))
+          : 0,
+        startedAt: firstNonEmptyText(value.startedAt),
+        finishedAt: firstNonEmptyText(value.finishedAt),
+        totalDurationMs: Number.isFinite(value.totalDurationMs) ? value.totalDurationMs : null,
+        summary,
+        lastEvent,
+        events,
+      };
+    }
+
+    function ensureBspParseDiagnostics() {
+      if (!cloneBspParseDiagnostics()) {
+        window.orlyBspParseDiagnostics = {
+          state: 'idle',
+          mapLabel: '',
+          bufferByteLength: 0,
+          startedAt: '',
+          finishedAt: '',
+          totalDurationMs: null,
+          summary: null,
+          lastEvent: null,
+          events: [],
+        };
+      }
+      return window.orlyBspParseDiagnostics;
+    }
+
+    function resetBspParseDiagnostics() {
+      window.orlyBspParseDiagnostics = {
+        state: 'idle',
+        mapLabel: '',
+        bufferByteLength: 0,
+        startedAt: '',
+        finishedAt: '',
+        totalDurationMs: null,
+        summary: null,
+        lastEvent: null,
+        events: [],
+      };
+    }
+
+    function beginBspParseDiagnostics(mapLabel, buffer) {
+      window.orlyBspParseDiagnostics = {
+        state: 'parsing',
+        mapLabel: firstNonEmptyText(mapLabel),
+        bufferByteLength: Number.isFinite(buffer?.byteLength) ? buffer.byteLength : 0,
+        startedAt: new Date().toISOString(),
+        finishedAt: '',
+        totalDurationMs: null,
+        summary: null,
+        lastEvent: null,
+        events: [],
+      };
+    }
+
+    function recordBspParseDiagnostic(event) {
+      const diagnostics = ensureBspParseDiagnostics();
+      const normalized = cloneBspParseEvent(event);
+      if (!normalized) return;
+      diagnostics.lastEvent = normalized;
+      diagnostics.events = [
+        ...diagnostics.events.slice(-(MAX_BSP_PARSE_EVENT_HISTORY - 1)),
+        normalized,
+      ];
+      const durationMs = normalized.payload?.durationMs;
+      if (Number.isFinite(durationMs) &&
+          (normalized.stage === 'parse:complete' || normalized.stage === 'parse:failed')) {
+        diagnostics.totalDurationMs = durationMs;
+      }
+      if (normalized.stage === 'parse:complete') {
+        diagnostics.summary = {
+          entityCount: normalized.payload?.entityCount ?? 0,
+          textureCount: normalized.payload?.textureCount ?? 0,
+          planeCount: normalized.payload?.planeCount ?? 0,
+          nodeCount: normalized.payload?.nodeCount ?? 0,
+          leafCount: normalized.payload?.leafCount ?? 0,
+          modelCount: normalized.payload?.modelCount ?? 0,
+          brushCount: normalized.payload?.brushCount ?? 0,
+          brushSideCount: normalized.payload?.brushSideCount ?? 0,
+          vertexCount: normalized.payload?.vertexCount ?? 0,
+          meshVertCount: normalized.payload?.meshVertCount ?? 0,
+          effectCount: normalized.payload?.effectCount ?? 0,
+          faceCount: normalized.payload?.faceCount ?? 0,
+          lightmapCount: normalized.payload?.lightmapCount ?? 0,
+          visClusterCount: normalized.payload?.visClusterCount ?? 0,
+        };
+      }
+    }
+
+    function finishBspParseDiagnostics(state, bsp = null) {
+      const diagnostics = ensureBspParseDiagnostics();
+      diagnostics.state = firstNonEmptyText(state, diagnostics.state, 'idle');
+      diagnostics.finishedAt = new Date().toISOString();
+      if (bsp) diagnostics.summary = summarizeBspForParseDiagnostics(bsp);
+      if (!Number.isFinite(diagnostics.totalDurationMs)) {
+        const startedAtMs = Date.parse(diagnostics.startedAt);
+        if (Number.isFinite(startedAtMs)) {
+          diagnostics.totalDurationMs = Math.max(0, Date.now() - startedAtMs);
+        }
+      }
+    }
+
+    function hasMeaningfulBspParseDiagnostics(diagnostics) {
+      return Boolean(
+        diagnostics &&
+        (
+          diagnostics.state !== 'idle' ||
+          diagnostics.startedAt.length > 0 ||
+          diagnostics.finishedAt.length > 0 ||
+          diagnostics.events.length > 0 ||
+          diagnostics.summary !== null
+        )
+      );
     }
 
     function summarizeWorldForSyncDiagnostics(world) {
@@ -997,6 +1160,26 @@
         `models=${request.modelCount ?? 0}`,
         `brushes=${request.brushCount ?? 0}`,
         `brushSides=${request.brushSideCount ?? 0}`,
+      ].join(', ');
+    }
+
+    function formatBspParseSummary(summary) {
+      if (!summary) return '(missing)';
+      return [
+        `entities=${summary.entityCount ?? 0}`,
+        `textures=${summary.textureCount ?? 0}`,
+        `planes=${summary.planeCount ?? 0}`,
+        `nodes=${summary.nodeCount ?? 0}`,
+        `leaves=${summary.leafCount ?? 0}`,
+        `models=${summary.modelCount ?? 0}`,
+        `brushes=${summary.brushCount ?? 0}`,
+        `brushSides=${summary.brushSideCount ?? 0}`,
+        `vertices=${summary.vertexCount ?? 0}`,
+        `meshVerts=${summary.meshVertCount ?? 0}`,
+        `effects=${summary.effectCount ?? 0}`,
+        `faces=${summary.faceCount ?? 0}`,
+        `lightmaps=${summary.lightmapCount ?? 0}`,
+        `visClusters=${summary.visClusterCount ?? 0}`,
       ].join(', ');
     }
 
@@ -1159,6 +1342,44 @@
       return lines;
     }
 
+    function formatBspParseDiagnosticsForClipboard(diagnostics) {
+      const parseDiagnostics = cloneBspParseDiagnostics(diagnostics);
+      if (!hasMeaningfulBspParseDiagnostics(parseDiagnostics)) return [];
+      const lines = [
+        '',
+        'BSP parse diagnostics:',
+        `State: ${parseDiagnostics.state}`,
+        `Map: ${firstNonEmptyText(parseDiagnostics.mapLabel, '(unknown)')}`,
+        `Input bytes: ${parseDiagnostics.bufferByteLength}`,
+        `Started at: ${firstNonEmptyText(parseDiagnostics.startedAt, '(unknown)')}`,
+      ];
+      if (parseDiagnostics.finishedAt.length > 0) {
+        lines.push(`Finished at: ${parseDiagnostics.finishedAt}`);
+      }
+      if (Number.isFinite(parseDiagnostics.totalDurationMs)) {
+        lines.push(`Total parse time: ${formatRocqSyncDuration(parseDiagnostics.totalDurationMs)}`);
+      }
+      if (parseDiagnostics.summary) {
+        lines.push(`Summary: ${formatBspParseSummary(parseDiagnostics.summary)}`);
+      }
+      if (parseDiagnostics.lastEvent) {
+        lines.push(`Last parse event: ${parseDiagnostics.lastEvent.stage}`);
+        lines.push(`Last parse payload: ${summarizeRocqSyncPayload(parseDiagnostics.lastEvent.payload, 240)}`);
+      } else {
+        lines.push('Last parse event: (none)');
+      }
+      if (parseDiagnostics.events.length > 0) {
+        lines.push('', 'Recent parse events:');
+        for (const event of parseDiagnostics.events) {
+          lines.push(
+            `- ${firstNonEmptyText(event.at, '(unknown time)')} ${event.stage}: ` +
+            `${summarizeRocqSyncPayload(event.payload, 180)}`
+          );
+        }
+      }
+      return lines;
+    }
+
     function formatErrorReportForClipboard(report = window.orlyErrorReport) {
       if (!report) return '';
       const raw = firstNonEmptyText(report.raw);
@@ -1174,6 +1395,7 @@
         `User agent: ${navigator.userAgent}`,
         ...formatBuildMetadata(report.build),
         `Location: ${formatErrorLocation(report.location)}`,
+        ...formatBspParseDiagnosticsForClipboard(report.parseDiagnostics),
         ...formatRocqSyncDiagnosticsForClipboard(report.diagnostics),
         '',
         'Stack trace:',
@@ -1232,8 +1454,13 @@
       status,
       error,
       fallback = 'Unknown error',
+      parseDiagnostics = null,
       diagnostics = null,
     }) {
+      const bspParseDiagnostics =
+        cloneBspParseDiagnostics(parseDiagnostics) ??
+        cloneBspParseDiagnostics(error?.parseDiagnostics) ??
+        cloneBspParseDiagnostics();
       const rocqSyncDiagnostics =
         cloneRocqSyncDiagnostics(diagnostics) ??
         cloneRocqSyncDiagnostics(error?.diagnostics) ??
@@ -1246,6 +1473,9 @@
         build: currentBuildInfo(),
         ...normalizeErrorReport(error, fallback),
       };
+      if (hasMeaningfulBspParseDiagnostics(bspParseDiagnostics)) {
+        report.parseDiagnostics = bspParseDiagnostics;
+      }
       if (rocqSyncDiagnostics) {
         report.diagnostics = rocqSyncDiagnostics;
       }
@@ -1290,6 +1520,7 @@
     }
 
     window.orlyBuildInfo = await loadBuildInfo();
+    resetBspParseDiagnostics();
     resetRocqSyncDiagnostics();
     clearErrorReport();
     copyErrorButton.addEventListener('click', () => {
@@ -1602,8 +1833,16 @@
           `Parsing ${selectedMapLabel} BSP…`,
           'Decoding level geometry and lightmaps.'
         );
-        const bsp = parseBsp(bspBuffer);
-        console.log(`orly: parsed BSP — ${bsp.faces.length} faces, ` +
+        beginBspParseDiagnostics(selectedMapLabel, bspBuffer);
+        const bsp = parseBsp(bspBuffer, {
+          onDiagnostic: recordBspParseDiagnostic,
+        });
+        finishBspParseDiagnostics('ready', bsp);
+        const parseDurationMs = cloneBspParseDiagnostics()?.totalDurationMs;
+        const parseDurationText = Number.isFinite(parseDurationMs)
+          ? ` in ${formatRocqSyncDuration(parseDurationMs)}`
+          : '';
+        console.log(`orly: parsed BSP${parseDurationText} — ${bsp.faces.length} faces, ` +
                     `${bsp.vertices.length} vertices, ` +
                     `${bsp.lightmaps.length} lightmaps`);
 
@@ -1741,6 +1980,9 @@
         clearStatus();
         console.log('orly: render pipeline active — snapshot seeded from Rocq state');
       } catch (err) {
+        if (cloneBspParseDiagnostics()?.state === 'parsing') {
+          finishBspParseDiagnostics('failed');
+        }
         console.error('BSP render init failed:', err);
         const msg = errorDetail(err);
         const isRocqSyncTimeout = err?.name === 'RocqSyncTimeoutError';
@@ -1749,6 +1991,7 @@
           title: isRocqSyncTimeout ? 'Rocq render sync timed out' : 'Render startup failed',
           status: isRocqSyncTimeout ? `Rocq sync timeout: ${msg}` : `Render error: ${msg}`,
           error: err,
+          parseDiagnostics: cloneBspParseDiagnostics(),
           diagnostics: cloneRocqSyncDiagnostics(),
         });
       }

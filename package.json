@@ -6,9 +6,9 @@
   "scripts": {
     "vendor:jscoq": "node scripts/vendor-jscoq.mjs",
     "playwright:install": "playwright install chromium",
-    "test:q3dm1-browser": "npm run --silent vendor:jscoq && node scripts/repro-q3dm1-render.mjs",
-    "test:pages-browser": "npm run --silent vendor:jscoq && ORLY_REPRO_SKIP_LOCAL=1 node scripts/repro-q3dm1-render.mjs",
-    "repro:q3dm1-render": "npm run --silent vendor:jscoq && node scripts/repro-q3dm1-render.mjs"
+    "test:browser": "npm run --silent vendor:jscoq && node scripts/browser-test.mjs",
+    "test:pages-browser": "npm run --silent vendor:jscoq && ORLY_REPRO_SKIP_LOCAL=1 node scripts/browser-test.mjs",
+    "repro:render": "npm run --silent vendor:jscoq && node scripts/browser-test.mjs"
   },
   "license": "MIT",
   "devDependencies": {

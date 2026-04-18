@@ -87,7 +87,7 @@ licensed-map startup:
 ```sh
 npm ci
 npm run playwright:install
-npm run test:q3dm1-browser
+npm run test:browser
 ```
 
 The regression script runs one bridge regression plus five scenarios against the

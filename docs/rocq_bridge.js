@@ -380,26 +380,79 @@ export function createRocqBridge(manager, options = {}) {
     },
 
     async load_world(world) {
+      const loadStartedAtMs = Date.now();
       emitDiagnostic(onDiagnostic, 'load_world:requested', summarizeWorld(world));
-      const sid = await getBridgeHelpersSid();
+      let sid;
+      try {
+        sid = await getBridgeHelpersSid();
+      } catch (err) {
+        emitDiagnostic(onDiagnostic, 'load_world:failed', {
+          phase: 'helpers-ready',
+          error: err.message,
+          durationMs: Date.now() - loadStartedAtMs,
+        });
+        throw err;
+      }
       emitDiagnostic(onDiagnostic, 'load_world:helpers-ready', { sid });
-      const wordsPromise = evalInitialGameStateWords(manager, sid, world)
-        .then(words => {
-          emitDiagnostic(onDiagnostic, 'load_world:game-state-words', summarizeWordList(words));
+
+      const wordsPromise = (async () => {
+        emitDiagnostic(onDiagnostic, 'load_world:game-state-words:start', {});
+        const t0 = Date.now();
+        try {
+          const words = await evalInitialGameStateWords(manager, sid, world);
+          emitDiagnostic(onDiagnostic, 'load_world:game-state-words', {
+            ...summarizeWordList(words),
+            durationMs: Date.now() - t0,
+          });
           return words;
-        });
-      const facesPromise = evalVisibleFaces(manager, sid, world)
-        .then(faces => {
-          emitDiagnostic(onDiagnostic, 'load_world:visible-faces', summarizeWordList(faces));
+        } catch (err) {
+          emitDiagnostic(onDiagnostic, 'load_world:game-state-words:failed', {
+            error: err.message,
+            durationMs: Date.now() - t0,
+          });
+          throw err;
+        }
+      })();
+
+      const facesPromise = (async () => {
+        emitDiagnostic(onDiagnostic, 'load_world:visible-faces:start', {});
+        const t0 = Date.now();
+        try {
+          const faces = await evalVisibleFaces(manager, sid, world);
+          emitDiagnostic(onDiagnostic, 'load_world:visible-faces', {
+            ...summarizeWordList(faces),
+            durationMs: Date.now() - t0,
+          });
           return faces;
+        } catch (err) {
+          emitDiagnostic(onDiagnostic, 'load_world:visible-faces:failed', {
+            error: err.message,
+            durationMs: Date.now() - t0,
+          });
+          throw err;
+        }
+      })();
+
+      let words, faces;
+      try {
+        [words, faces] = await Promise.all([wordsPromise, facesPromise]);
+      } catch (err) {
+        emitDiagnostic(onDiagnostic, 'load_world:failed', {
+          error: err.message,
+          durationMs: Date.now() - loadStartedAtMs,
         });
-      const [words, faces] = await Promise.all([wordsPromise, facesPromise]);
+        throw err;
+      }
+
       collisionWorldExpr = formatCollisionWorld(world);
       gsWords        = words;
       initialGsWords = [...words];
       visibleFaces   = faces;
       const snapshot = snapshotFromGameStateWords(gsWords, visibleFaces);
-      emitDiagnostic(onDiagnostic, 'load_world:complete', summarizeSnapshot(snapshot));
+      emitDiagnostic(onDiagnostic, 'load_world:complete', {
+        ...summarizeSnapshot(snapshot),
+        durationMs: Date.now() - loadStartedAtMs,
+      });
       return snapshot;
     },
 

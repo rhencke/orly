@@ -304,7 +304,7 @@ async function waitForSentenceProcessed(sentence, sid) {
   }
 }
 
-async function ensureBridgeHelpersReady(manager) {
+async function ensureBridgeHelpersReady(manager, emit) {
   await waitForManagerReady(manager);
 
   let sentence = manager.doc.sentences.find(stm =>
@@ -314,11 +314,19 @@ async function ensureBridgeHelpersReady(manager) {
     return sentence.coq_sid;
   }
 
+  // Step through sentences one at a time, emitting a compile:sentence event
+  // after each one completes.  These events let the activity-based timeout
+  // (see withActivityTimeout in index.html) know that Rocq is still making
+  // forward progress, and give the loading overlay something to display.
+  let sentenceIndex = 0;
   while (manager.goNext(false)) {
     sentence = manager.doc.sentences[manager.doc.sentences.length - 1];
     const sid = await waitForSentenceSid(sentence);
     await waitForSentenceProcessed(sentence, sid);
-    if (sentence.text.includes(BRIDGE_HELPERS_DEFINITION)) {
+    sentenceIndex++;
+    const isTarget = sentence.text.includes(BRIDGE_HELPERS_DEFINITION);
+    emitDiagnostic(emit, 'compile:sentence', { sid, sentenceIndex, isTarget });
+    if (isTarget) {
       return sid;
     }
   }
@@ -380,7 +388,7 @@ export function createRocqBridge(manager, options = {}) {
   });
 
   function getBridgeHelpersSid() {
-    bridgeHelpersSidPromise ||= ensureBridgeHelpersReady(manager);
+    bridgeHelpersSidPromise ||= ensureBridgeHelpersReady(manager, onDiagnostic);
     return bridgeHelpersSidPromise;
   }
 

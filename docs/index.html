@@ -1493,6 +1493,44 @@
         ...diagnostics.events.slice(-(MAX_ROCQ_SYNC_EVENT_HISTORY - 1)),
         normalized,
       ];
+      // Signal to withActivityTimeout that Rocq is alive and making progress.
+      // This resets the inactivity countdown so slow-but-progressing compilation
+      // (e.g. stepping through 2000+ lines of theory) is never killed mid-flight.
+      rocqSyncActivityReset?.();
+      // Update the loading overlay detail while the activity timeout is active
+      // (i.e. during load_world / withActivityTimeout).  Before that window the
+      // overlay is showing other phase messages; we leave those alone.
+      if (rocqSyncActivityReset !== null) {
+        updateRocqSyncOverlayProgress(normalized);
+      }
+    }
+
+    // Update the loading overlay detail text in response to bridge events that
+    // arrive while the Rocq sync activity timeout is running:
+    //
+    //   compile:sentence        — theory is still compiling; show per-sentence
+    //                             progress so the user knows Rocq is alive.
+    //   load_world:helpers-ready — compilation finished; restore the canonical
+    //                             "running queries" detail so the overlay is
+    //                             accurate for the query phase that follows.
+    //
+    // Only called while rocqSyncActivityReset is non-null (inside load_world).
+    function updateRocqSyncOverlayProgress(event) {
+      const { stage, payload } = event;
+      if (stage === 'compile:sentence') {
+        const n = payload?.sentenceIndex;
+        if (typeof n === 'number') {
+          placeholderDetail.textContent =
+            `Compiling game-core theory\u2026 ${n} ${n === 1 ? 'sentence' : 'sentences'} done`;
+          placeholderDetail.hidden = false;
+        }
+      } else if (stage === 'load_world:helpers-ready') {
+        // Theory compilation is complete; restore the canonical detail so the
+        // overlay doesn't continue to say "N sentences done" during queries.
+        placeholderDetail.textContent =
+          'Building the initial render snapshot from the verified game core.';
+        placeholderDetail.hidden = false;
+      }
     }
 
     function finishRocqSyncDiagnostics(state) {
@@ -1583,6 +1621,47 @@
         ]);
       } finally {
         if (timeoutId !== null) window.clearTimeout(timeoutId);
+      }
+    }
+
+    // Like withTimeout, but the inactivity deadline resets every time activity
+    // occurs.  'registerReset' is called once with a reset function; the caller
+    // stores it somewhere and invokes it whenever "activity" should reset the
+    // timer (e.g. a bridge diagnostic event arriving).  When the promise settles
+    // (or the timeout fires), registerReset is called with null to unregister.
+    //
+    // The timeout only fires if no activity occurs for timeoutMs milliseconds.
+    // A slow-but-progressing Rocq compilation that emits compile:sentence events
+    // every few seconds will never trip this timer.
+    async function withActivityTimeout(promise, timeoutMs, registerReset, createError) {
+      let timeoutId = null;
+      let rejectFn = null;
+
+      function reset() {
+        // Guard: promise may have already settled (rejectFn cleared in finally).
+        if (rejectFn === null) return;
+        if (timeoutId !== null) window.clearTimeout(timeoutId);
+        timeoutId = window.setTimeout(() => {
+          // Double-check inside the callback — another reset may have fired
+          // synchronously between the tick and here.
+          if (rejectFn !== null) rejectFn(createError());
+        }, timeoutMs);
+      }
+
+      try {
+        const timeoutPromise = new Promise((_, reject) => {
+          rejectFn = reject;
+          registerReset(reset);
+          reset(); // start the initial countdown
+        });
+        return await Promise.race([promise, timeoutPromise]);
+      } finally {
+        rejectFn = null;
+        if (timeoutId !== null) {
+          window.clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+        registerReset(null); // release the reset hook
       }
     }
 
@@ -2209,6 +2288,11 @@
     let jscoqOk = false;
     let rocqBridge = null;
     let rocqBridgeWarmup = null;
+    // Holds the timer-reset callback installed by withActivityTimeout while the
+    // Rocq sync is running; null at all other times.  recordRocqSyncDiagnostic
+    // calls it so that every bridge event (compile:sentence, load_world:*, …)
+    // restarts the inactivity countdown.
+    let rocqSyncActivityReset = null;
     showPlaceholder(
       'Loading JsCoq and game theories…',
       'Fetching the Rocq runtime and the browser-side game theory bundle.'
@@ -2384,9 +2468,16 @@
         beginRocqSyncDiagnostics(selectedMapLabel, rocqSyncWorld);
         let initialSnapshot;
         try {
-          initialSnapshot = await withTimeout(
+          // Use an activity-based timeout so Rocq compilation that emits
+          // compile:sentence events (added in #80) is never killed mid-flight.
+          // Each bridge event (recorded via recordRocqSyncDiagnostic) resets
+          // the countdown; only a full ROCQ_SYNC_TIMEOUT_MS of silence causes
+          // the error — meaning the worker has truly stalled, not just that
+          // the theory takes a while to compile on a slow device.
+          initialSnapshot = await withActivityTimeout(
             rocqBridge.load_world(rocqSyncWorld),
             ROCQ_SYNC_TIMEOUT_MS,
+            fn => { rocqSyncActivityReset = fn; },
             createRocqSyncTimeoutError
           );
           finishRocqSyncDiagnostics('ready');

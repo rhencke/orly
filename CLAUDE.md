@@ -13,6 +13,32 @@ make serve         # local dev server on :8080
 
 `make test` is the gate — nothing merges unless it passes.
 
+### Playwright browser validation
+
+For changes that touch browser-side code (`docs/*.js`, `docs/index.html`,
+layout, UI behaviour, rendering), also run the Playwright suite:
+
+```bash
+npm run test:q3dm1-browser   # full local browser scenario suite
+```
+
+This spins up a headless Chromium instance and exercises: no-assets load,
+desktop render startup (lower-panel chrome, section switcher, keyboard
+resize), mobile portrait/landscape render startup (touch targets, safe-area
+padding, lower-panel usability), BSP parse → Rocq handoff, error overlay
+copy flow, and Rocq sync timeout overlay. Screenshots land in `/tmp` on
+failure for inspection.
+
+Prerequisites (one-time):
+```bash
+npm ci                        # install node_modules
+npm run playwright:install    # download Chromium browser binary
+```
+
+Run the suite whenever you modify `docs/`, `scripts/`, or browser-facing
+logic. It is not wired into `make test` (needs a browser binary) but should
+pass before any PR touches the browser layer.
+
 ## Proof strategy
 
 Proofs are first-class output, not an afterthought. Every parsed type

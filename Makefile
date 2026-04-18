@@ -34,6 +34,13 @@ THEORIES := \
 # JsCoq 0.17.1 runs Rocq 8.17.1 and cannot load pre-compiled .vo
 # packages built with our system Rocq 9.x; this flat-file approach
 # lets JsCoq compile the theories on the fly using only the stdlib.
+#
+# Proof-only Lemma/Theorem blocks are stripped from the bundle.  The
+# browser only needs the computational content (Definitions, Fixpoints,
+# Records, Inductive types) for Eval vm_compute queries — it never
+# invokes any lemma directly.  All proofs are still verified by the
+# desktop Rocq build (make test); the stripped bundle is leaner so
+# JsCoq compiles far fewer sentences on mobile devices.
 DOCS_THEORIES_DIR = docs/theories
 BSP_CORE_SRCS     = theories/BspBinary.v theories/BspEntity.v theories/GameState.v
 BSP_CORE_V        = $(DOCS_THEORIES_DIR)/BspCore.v
@@ -47,7 +54,9 @@ PAGES_MANIFEST    = $(ASSETS_DIR)/manifest.json
 $(BSP_CORE_V): $(BSP_CORE_SRCS)
 	mkdir -p $(DOCS_THEORIES_DIR)
 	{ cat $(BSP_CORE_SRCS); } \
-	  | sed -E '/^From Bsp Require Import /d; s/^From Stdlib Require Import ([^.]+)\.$$/Require Import \1./' > $@
+	  | sed -E '/^From Bsp Require Import /d; s/^From Stdlib Require Import ([^.]+)\.$$/Require Import \1./' \
+	  | awk '/^Lemma /{skip=1;next} /^Theorem /{skip=1;next} skip&&/Qed\./{skip=0;next} skip{next} {print}' \
+	  > $@
 
 browser-theories: $(BSP_CORE_V)
 

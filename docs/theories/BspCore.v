@@ -128,49 +128,22 @@ Definition get_f32_le (bs : bytes) (i : nat) : option Q :=
 (* ------------------------------------------------------------------ *)
 
 (** Byte reads from a singleton list succeed. *)
-Lemma get_u8_singleton : forall b,
-  get_u8 [b] 0 = Some b.
-Proof. reflexivity. Qed.
 
 (** Two zero bytes decode as signed 0. *)
-Lemma get_i16_le_zero :
-  get_i16_le [0; 0] 0 = Some 0.
-Proof. reflexivity. Qed.
 
 (** All-ones bytes are [−1] in 16-bit two's complement. *)
-Lemma get_i16_le_minus_one :
-  get_i16_le [255; 255] 0 = Some (-1).
-Proof. reflexivity. Qed.
 
 (** Four zero bytes decode as [0]. *)
-Lemma get_i32_le_zero :
-  get_i32_le [0; 0; 0; 0] 0 = Some 0.
-Proof. reflexivity. Qed.
 
 (** Little-endian byte order: the first byte is least significant. *)
-Lemma get_i32_le_one :
-  get_i32_le [1; 0; 0; 0] 0 = Some 1.
-Proof. reflexivity. Qed.
 
 (** All-ones bytes are [−1] in two's complement. *)
-Lemma get_i32_le_minus_one :
-  get_i32_le [255; 255; 255; 255] 0 = Some (-1).
-Proof. reflexivity. Qed.
 
 (** [0x3F800000] is the IEEE 754 binary32 encoding of [1.0]. *)
-Lemma decode_f32_one :
-  (decode_f32_bits 0x3F800000 == 1)%Q.
-Proof. vm_compute. reflexivity. Qed.
 
 (** [0x00000000] encodes [0.0]. *)
-Lemma decode_f32_zero :
-  (decode_f32_bits 0 == 0)%Q.
-Proof. vm_compute. reflexivity. Qed.
 
 (** [0xBF800000] encodes [−1.0]. *)
-Lemma decode_f32_neg_one :
-  (decode_f32_bits 0xBF800000 == -1)%Q.
-Proof. vm_compute. reflexivity. Qed.
 (** * Q3 BSP entity lump parser -- text to typed key-value structures.
 
     The entity lump (lump index 0) is the only text-based lump in the
@@ -352,47 +325,19 @@ Definition parse_entities (cs : list Z) : option (list bsp_entity) :=
 (* ------------------------------------------------------------------ *)
 
 (** An empty input parses to an empty entity list. *)
-Lemma parse_entities_empty :
-  parse_entities [] = Some [].
-Proof. reflexivity. Qed.
 
 (** Whitespace-only input parses to an empty entity list. *)
-Lemma parse_entities_whitespace :
-  parse_entities [32; 10; 13; 9] = Some [].
-Proof. reflexivity. Qed.
 
 (** A null byte (common trailing byte in BSP entity lumps) parses to
     an empty entity list. *)
-Lemma parse_entities_null :
-  parse_entities [0] = Some [].
-Proof. reflexivity. Qed.
 
 (** A single entity with one key-value pair. *)
-Lemma parse_entities_single :
-  parse_entities
-    [123; 10;                        (* { \n *)
-     34; 107; 34; 32; 34; 118; 34;  (* "k" "v" *)
-     10; 125; 10]                    (* \n } \n *)
-  = Some [[(  [107], [118]  )]].
-Proof. vm_compute. reflexivity. Qed.
 
 (** Two entities parse correctly. *)
-Lemma parse_entities_two :
-  parse_entities
-    [123; 10; 34; 97; 34; 32; 34; 98; 34; 10; 125; 10;   (* { "a" "b" } *)
-     123; 10; 34; 99; 34; 32; 34; 100; 34; 10; 125; 10]  (* { "c" "d" } *)
-  = Some [  [([97], [98])]  ;  [([99], [100])]  ].
-Proof. vm_compute. reflexivity. Qed.
 
 (** An unclosed brace returns [None]. *)
-Lemma parse_entities_unclosed :
-  parse_entities [123; 10] = None.
-Proof. vm_compute. reflexivity. Qed.
 
 (** An unclosed quote returns [None]. *)
-Lemma parse_entities_unclosed_quote :
-  parse_entities [123; 10; 34; 97; 10; 125] = None.
-Proof. vm_compute. reflexivity. Qed.
 
 (* ------------------------------------------------------------------ *)
 (** ** Key-value lookup                                                 *)
@@ -528,59 +473,26 @@ Definition parse_inline_model_ref (cs : list Z) : option Z :=
 (* ------------------------------------------------------------------ *)
 
 (** [list_Z_eqb] is reflexive. *)
-Lemma list_Z_eqb_refl : forall xs, list_Z_eqb xs xs = true.
-Proof.
-  induction xs as [| x xs' IH]; simpl.
-  - reflexivity.
-  - rewrite Z.eqb_refl. simpl. exact IH.
-Qed.
 
 (** Matching key at the head of an entity returns that key's value. *)
-Lemma entity_get_val_head : forall k v rest,
-  entity_get_val ((k, v) :: rest) k = Some v.
-Proof.
-  intros k v rest. simpl. rewrite list_Z_eqb_refl. reflexivity.
-Qed.
 
 (** Empty entity list has no keys. *)
-Lemma entity_get_val_nil : forall key,
-  entity_get_val [] key = None.
-Proof. reflexivity. Qed.
 
 (** Empty input gives [None]. *)
-Lemma parse_int_none_empty : parse_int [] = None.
-Proof. reflexivity. Qed.
 
 (** Bare minus gives [None]. *)
-Lemma parse_int_none_minus_only : parse_int [45] = None.
-Proof. vm_compute. reflexivity. Qed.
 
 (** Single zero digit parses to 0. *)
-Lemma parse_int_zero : parse_int [48] = Some (0, []).
-Proof. vm_compute. reflexivity. Qed.
 
 (** Two-digit positive integer. *)
-Lemma parse_int_pos_42 : parse_int [52; 50] = Some (42, []).
-Proof. vm_compute. reflexivity. Qed.
 
 (** Negative integer. *)
-Lemma parse_int_neg_1 : parse_int [45; 49] = Some (-1, []).
-Proof. vm_compute. reflexivity. Qed.
 
 (** A well-formed inline model reference parses successfully. *)
-Lemma parse_inline_model_ref_pos :
-  parse_inline_model_ref [42; 49; 50] = Some 12.
-Proof. vm_compute. reflexivity. Qed.
 
 (** Negative inline model references are rejected. *)
-Lemma parse_inline_model_ref_neg :
-  parse_inline_model_ref [42; 45; 49] = None.
-Proof. vm_compute. reflexivity. Qed.
 
 (** Missing the leading ['*'] is not a valid inline model reference. *)
-Lemma parse_inline_model_ref_missing_star :
-  parse_inline_model_ref [49; 50] = None.
-Proof. vm_compute. reflexivity. Qed.
 (** * Game-state and render-snapshot types for the Rocq game core.
 
     Defines the per-tick data types that flow between the JavaScript
@@ -906,75 +818,26 @@ Definition render_snapshot_camera_words (rs : render_snapshot) : list Z :=
 
 (** Extracting a snapshot from the initial state yields the empty
     snapshot. *)
-Lemma extract_snapshot_init :
-  extract_snapshot game_state_init = render_snapshot_empty.
-Proof. reflexivity. Qed.
 
 (** The initial game state has tick count 0. *)
-Lemma game_state_init_tick :
-  gs_tick game_state_init = 0.
-Proof. reflexivity. Qed.
 
 (** The initial game state is grounded. *)
-Lemma game_state_init_grounded :
-  gs_on_ground game_state_init = true.
-Proof. reflexivity. Qed.
 
 (** The zero input snapshot has zero delta time. *)
-Lemma input_snapshot_zero_dt :
-  is_dt_ms input_snapshot_zero = 0.
-Proof. reflexivity. Qed.
 
 (** The zero input snapshot has no keys pressed. *)
-Lemma input_snapshot_zero_no_keys :
-  is_forward input_snapshot_zero = false /\
-  is_back    input_snapshot_zero = false /\
-  is_left    input_snapshot_zero = false /\
-  is_right   input_snapshot_zero = false /\
-  is_jump    input_snapshot_zero = false.
-Proof. repeat split; reflexivity. Qed.
 
 (** Entity count is preserved through snapshot extraction. *)
-Lemma extract_snapshot_entity_count : forall gs,
-  length (rs_entity_positions (extract_snapshot gs)) =
-  length (gs_entities gs).
-Proof.
-  intros gs. unfold extract_snapshot. simpl.
-  apply length_map.
-Qed.
 
 (** The camera position in the snapshot matches the game state. *)
-Lemma extract_snapshot_camera_pos : forall gs,
-  rs_camera_pos (extract_snapshot gs) = gs_position gs.
-Proof. reflexivity. Qed.
 
 (** The camera yaw in the snapshot matches the game state. *)
-Lemma extract_snapshot_camera_yaw : forall gs,
-  rs_camera_yaw (extract_snapshot gs) = gs_yaw gs.
-Proof. reflexivity. Qed.
 
 (** The camera pitch in the snapshot matches the game state. *)
-Lemma extract_snapshot_camera_pitch : forall gs,
-  rs_camera_pitch (extract_snapshot gs) = gs_pitch gs.
-Proof. reflexivity. Qed.
 
 (** Camera-word serialization always yields five rational pairs. *)
-Lemma render_snapshot_camera_words_length : forall rs,
-  length (render_snapshot_camera_words rs) = 10%nat.
-Proof.
-  intros rs. unfold render_snapshot_camera_words, q_words.
-  simpl. reflexivity.
-Qed.
 
-Lemma extract_snapshot_with_visible_faces_camera_pos : forall gs visible_faces,
-  rs_camera_pos (extract_snapshot_with_visible_faces gs visible_faces) =
-  gs_position gs.
-Proof. reflexivity. Qed.
 
-Lemma extract_snapshot_with_visible_faces_visible_faces : forall gs visible_faces,
-  rs_visible_faces (extract_snapshot_with_visible_faces gs visible_faces) =
-  visible_faces.
-Proof. reflexivity. Qed.
 
 (* ------------------------------------------------------------------ *)
 (** ** Spawn-point extraction from entity data                          *)
@@ -1441,194 +1304,37 @@ Definition grounded_by_worldb
 
 (** Parsing the canonical "0 0 24" spawn height produces the correct
     vec3. *)
-Lemma parse_origin_example :
-  parse_origin_vec3 [48; 32; 48; 32; 50; 52] =
-    Some (mk_vec3 0 0 24).
-Proof. vm_compute. reflexivity. Qed.
 
 (** Negative origin components are handled correctly. *)
-Lemma parse_origin_neg_example :
-  parse_origin_vec3 [45; 52; 56; 32; 49; 50; 56; 32; 45; 56] =
-    Some (mk_vec3 (inject_Z (-48)) (inject_Z 128) (inject_Z (-8))).
-Proof. vm_compute. reflexivity. Qed.
 
-Lemma parse_trigger_push_metadata_example :
-  parse_trigger_push_metadata
-    [ (key_classname, val_trigger_push)
-    ; (key_model, [42; 51])
-    ; (key_target, [112; 97; 100; 49])
-    ] =
-  Some (mk_trigger_push_metadata 3 [112; 97; 100; 49]).
-Proof. vm_compute. reflexivity. Qed.
 
-Lemma parse_trigger_push_metadata_requires_target :
-  parse_trigger_push_metadata
-    [ (key_classname, val_trigger_push)
-    ; (key_model, [42; 51])
-    ] = None.
-Proof. vm_compute. reflexivity. Qed.
 
-Lemma parse_target_position_metadata_example :
-  parse_target_position_metadata
-    [ (key_classname, val_target_position)
-    ; (key_targetname, [112; 97; 100; 49])
-    ; (key_origin, [49; 50; 56; 32; 48; 32; 50; 53; 54])
-    ] =
-  Some (mk_target_position_metadata
-          [112; 97; 100; 49]
-          (mk_vec3 128 0 256)).
-Proof. vm_compute. reflexivity. Qed.
 
-Lemma find_target_position_origin_example :
-  find_target_position_origin
-    [ mk_target_position_metadata [112; 97; 100; 49] (mk_vec3 128 0 256) ]
-    [112; 97; 100; 49] =
-  Some (mk_vec3 128 0 256).
-Proof. vm_compute. reflexivity. Qed.
 
-Lemma initial_trigger_states_from_entities_example :
-  initial_trigger_states_from_entities
-    [ ( (key_classname, val_trigger_push)
-        :: (key_model, [42; 51])
-        :: (key_target, [112; 97; 100; 49])
-        :: nil )
-    ; ( (key_classname, val_target_position)
-        :: (key_targetname, [112; 97; 100; 49])
-        :: (key_origin, [49; 50; 56; 32; 48; 32; 50; 53; 54])
-        :: nil )
-    ] =
-  [mk_entity_state 0 3 (mk_vec3 128 0 256) true].
-Proof. vm_compute. reflexivity. Qed.
 
 (** An empty entity list has no spawn points. *)
-Lemma select_spawn_point_nil :
-  select_spawn_point [] = None.
-Proof. reflexivity. Qed.
 
 (** Falling back on an empty entity list gives [game_state_init]. *)
-Lemma game_state_from_entities_nil_fallback :
-  game_state_from_entities [] = game_state_init.
-Proof. reflexivity. Qed.
 
 (** A spawn-derived state has tick count 0. *)
-Lemma game_state_from_entities_tick : forall entities,
-  gs_tick (game_state_from_entities entities) = 0.
-Proof.
-  intros entities. unfold game_state_from_entities.
-  destruct (select_spawn_point entities) as [[[px py pz] yaw] |];
-    reflexivity.
-Qed.
 
 (** A spawn-derived state has zero velocity. *)
-Lemma game_state_from_entities_velocity : forall entities,
-  gs_velocity (game_state_from_entities entities) = vec3_zero.
-Proof.
-  intros entities. unfold game_state_from_entities.
-  destruct (select_spawn_point entities) as [[[px py pz] yaw] |];
-    reflexivity.
-Qed.
 
 (** A spawn-derived state starts grounded. *)
-Lemma game_state_from_entities_grounded : forall entities,
-  gs_on_ground (game_state_from_entities entities) = true.
-Proof.
-  intros entities. unfold game_state_from_entities.
-  destruct (select_spawn_point entities) as [[[px py pz] yaw] |];
-    reflexivity.
-Qed.
 
-Lemma game_state_from_entities_entities : forall entities,
-  gs_entities (game_state_from_entities entities) =
-  initial_trigger_states_from_entities entities.
-Proof.
-  intros entities. unfold game_state_from_entities.
-  destruct (select_spawn_point entities) as [[[px py pz] yaw] |];
-    reflexivity.
-Qed.
 
 (** When a spawn point is found, the initial position comes from it. *)
-Lemma game_state_from_entities_position : forall entities pos yaw,
-  select_spawn_point entities = Some (pos, yaw) ->
-  gs_position (game_state_from_entities entities) = pos.
-Proof.
-  intros entities pos yaw Hspawn.
-  unfold game_state_from_entities. rewrite Hspawn. reflexivity.
-Qed.
 
 (** When a spawn point is found, the initial yaw comes from it. *)
-Lemma game_state_from_entities_yaw : forall entities pos yaw,
-  select_spawn_point entities = Some (pos, yaw) ->
-  gs_yaw (game_state_from_entities entities) = yaw.
-Proof.
-  intros entities pos yaw Hspawn.
-  unfold game_state_from_entities. rewrite Hspawn. reflexivity.
-Qed.
 
 (** The bridge helper always yields the five serialized camera values. *)
-Lemma initial_camera_words_from_entities_length : forall entities,
-  length (initial_camera_words_from_entities entities) = 10%nat.
-Proof.
-  intros entities. unfold initial_camera_words_from_entities.
-  apply render_snapshot_camera_words_length.
-Qed.
 
-Lemma texture_visibleb_empty :
-  texture_visibleb (mk_render_texture_input [] 0 0) = false.
-Proof. reflexivity. Qed.
 
-Lemma texture_visibleb_noshader :
-  texture_visibleb (mk_render_texture_input val_noshader 0 0) = false.
-Proof. reflexivity. Qed.
 
-Lemma valid_patch_gridb_even_width : forall tex nv nm h,
-  valid_patch_gridb (mk_render_face_input tex face_type_patch nv nm 4 h) = false.
-Proof.
-  intros. unfold valid_patch_gridb. simpl.
-  destruct (h <? 3); reflexivity.
-Qed.
 
-Lemma visible_face_indices_aux_length_le : forall faces textures start,
-  (length (visible_face_indices_aux faces textures start) <= length faces)%nat.
-Proof.
-  induction faces as [| f rest IH]; intros textures start; simpl.
-  - lia.
-  - destruct (renderable_faceb textures f); simpl.
-    + apply le_n_S. exact (IH textures (start + 1)).
-    + apply le_S. exact (IH textures (start + 1)).
-Qed.
 
-Lemma visible_face_indices_length_le : forall faces textures,
-  (length (visible_face_indices faces textures) <= length faces)%nat.
-Proof.
-  intros faces textures. unfold visible_face_indices.
-  apply visible_face_indices_aux_length_le.
-Qed.
 
-Lemma visible_face_indices_aux_bounds :
-  forall faces textures start i,
-    In i (visible_face_indices_aux faces textures start) ->
-    start <= i < start + Z.of_nat (length faces).
-Proof.
-  induction faces as [| f rest IH]; intros textures start i Hin; simpl in *.
-  - contradiction.
-  - destruct (renderable_faceb textures f) eqn:Hrender.
-    + simpl in Hin. destruct Hin as [-> | Hin].
-      * simpl. lia.
-      * specialize (IH textures (start + 1) i Hin). simpl in IH. lia.
-    + specialize (IH textures (start + 1) i Hin). simpl in IH. lia.
-Qed.
 
-Lemma initial_visible_faces_from_inputs_in_bounds :
-  forall entities faces textures i,
-    In i (initial_visible_faces_from_inputs entities faces textures) ->
-    0 <= i < Z.of_nat (length faces).
-Proof.
-  intros entities faces textures i Hin.
-  unfold initial_visible_faces_from_inputs, initial_render_snapshot_from_inputs.
-  simpl in Hin.
-  apply (visible_face_indices_aux_bounds faces textures 0 i) in Hin.
-  simpl in Hin. lia.
-Qed.
 
 (* ------------------------------------------------------------------ *)
 (** ** World-state serialization and frame stepping                    *)
@@ -1934,200 +1640,38 @@ Definition initial_game_state_words_from_entities
 (** ** Correctness lemmas for world stepping                           *)
 (* ------------------------------------------------------------------ *)
 
-Lemma entity_state_to_words_length : forall es,
-  length (entity_state_to_words es) = entity_state_words_count.
-Proof.
-  intros es. unfold entity_state_to_words, q_words, entity_state_words_count.
-  repeat rewrite length_app. simpl. reflexivity.
-Qed.
 
-Lemma entity_states_to_words_length : forall entities,
-  length (entity_states_to_words entities) =
-  (entity_state_words_count * length entities)%nat.
-Proof.
-  induction entities as [| es rest IH]; simpl.
-  - reflexivity.
-  - destruct es as [entity_index model_index origin active].
-    destruct origin as [ox oy oz].
-    unfold entity_state_words_count in *. simpl in *.
-    rewrite IH. lia.
-Qed.
 
-Lemma game_state_to_words_length : forall gs,
-  length (game_state_to_words gs) =
-  (game_state_words_count +
-   entity_state_words_count * length (gs_entities gs))%nat.
-Proof.
-  intros [[px py pz] [vx vy vz] yaw pitch grounded entities tick].
-  unfold game_state_to_words, q_words, game_state_words_count, entity_state_words_count.
-  simpl.
-  rewrite entity_states_to_words_length. reflexivity.
-Qed.
 
 (** Stepping integrates position from the per-frame velocity. *)
-Lemma step_world_position : forall gs input,
-  gs_position (step_world gs input) =
-  advance_position
-    (gs_position gs)
-    (movement_velocity
-       (step_yaw (gs_yaw gs) (is_yaw_delta input))
-       (v3_z (gs_velocity gs))
-       input)
-    (is_dt_ms input).
-Proof. reflexivity. Qed.
 
 (** Stepping derives movement velocity from the updated yaw. *)
-Lemma step_world_velocity : forall gs input,
-  gs_velocity (step_world gs input) =
-  movement_velocity
-    (step_yaw (gs_yaw gs) (is_yaw_delta input))
-    (v3_z (gs_velocity gs))
-    input.
-Proof. reflexivity. Qed.
 
 (** Stepping applies look input to orientation. *)
-Lemma step_world_yaw : forall gs input,
-  gs_yaw (step_world gs input) =
-  step_yaw (gs_yaw gs) (is_yaw_delta input).
-Proof. reflexivity. Qed.
 
-Lemma step_world_pitch : forall gs input,
-  gs_pitch (step_world gs input) =
-  step_pitch (gs_pitch gs) (is_pitch_delta input).
-Proof. reflexivity. Qed.
 
-Lemma step_world_on_ground : forall gs input,
-  gs_on_ground (step_world gs input) = gs_on_ground gs.
-Proof. reflexivity. Qed.
 
-Lemma step_world_entities : forall gs input,
-  gs_entities (step_world gs input) = gs_entities gs.
-Proof. reflexivity. Qed.
 
 (** Stepping increments the tick counter. *)
-Lemma step_world_tick : forall gs input,
-  gs_tick (step_world gs input) = gs_tick gs + 1.
-Proof. reflexivity. Qed.
 
-Lemma normalize_degrees_360_wraps_negative :
-  normalize_degrees_360 (-10)%Q = 350%Q.
-Proof. vm_compute. reflexivity. Qed.
 
-Lemma step_pitch_clamps_high :
-  step_pitch 10%Q 100%Q = pitch_limit.
-Proof. vm_compute. reflexivity. Qed.
 
-Lemma step_pitch_clamps_low :
-  step_pitch (-10)%Q (-100)%Q = (- pitch_limit)%Q.
-Proof. vm_compute. reflexivity. Qed.
 
-Lemma step_world_turn_then_move_example :
-  let pos :=
-    gs_position
-      (step_world game_state_init
-        (mk_input_snapshot true false false false false 90%Q 0%Q 1000)) in
-  v3_x pos == 0 /\ v3_y pos == 320 /\ v3_z pos == 0.
-Proof. vm_compute. repeat split; reflexivity. Qed.
 
-Lemma step_world_forward_example :
-  let pos :=
-    gs_position
-      (step_world game_state_init
-        (mk_input_snapshot true false false false false 0%Q 0%Q 1000)) in
-  v3_x pos == 320 /\ v3_y pos == 0 /\ v3_z pos == 0.
-Proof. vm_compute. repeat split; reflexivity. Qed.
 
-Lemma step_world_right_at_ninety_example :
-  let pos :=
-    gs_position
-      (step_world
-        (mk_game_state vec3_zero vec3_zero 90%Q 0 true [] 0)
-        (mk_input_snapshot false false false true false 0%Q 0%Q 1000)) in
-  v3_x pos == -320 /\ v3_y pos == 0 /\ v3_z pos == 0.
-Proof. vm_compute. repeat split; reflexivity. Qed.
 
-Lemma step_world_conflicting_axes_cancel_example :
-  let pos :=
-    gs_position
-      (step_world game_state_init
-        (mk_input_snapshot true true true true false 0%Q 0%Q 1000)) in
-  v3_x pos == 0 /\ v3_y pos == 0 /\ v3_z pos == 0.
-Proof. vm_compute. repeat split; reflexivity. Qed.
 
-Lemma step_world_zero_dt_preserves_position_example :
-  let pos :=
-    gs_position
-      (step_world
-        (mk_game_state (mk_vec3 5 6 7) vec3_zero 0 0 true [] 0)
-        (mk_input_snapshot true false false false false 0%Q 0%Q 0)) in
-  v3_x pos == 5 /\ v3_y pos == 6 /\ v3_z pos == 7.
-Proof. vm_compute. repeat split; reflexivity. Qed.
 
 (** Helper: [Z.pos p] is never [<=? 0]. *)
-Lemma Z_pos_leb_0 : forall p : positive,
-  (Z.pos p <=? 0) = false.
-Proof.
-  intro p. apply Z.leb_gt. apply Pos2Z.is_pos.
-Qed.
 
 (** [entity_state_to_words] round-trips through [entity_state_from_words]
     with any trailing payload preserved. *)
-Lemma entity_state_roundtrip : forall es tail,
-  entity_state_from_words (entity_state_to_words es ++ tail) =
-  Some (es, tail).
-Proof.
-  intros [entity_index model_index [ox oy oz] active] tail.
-  destruct ox as [oxn oxd], oy as [oyn oyd], oz as [ozn ozd].
-  unfold entity_state_to_words, entity_state_from_words, q_words. simpl.
-  destruct tail as [| z tail']; repeat rewrite Z_pos_leb_0; simpl;
-    destruct active; reflexivity.
-Qed.
 
-Lemma entity_states_roundtrip : forall entities,
-  entity_states_from_words_aux (length entities) (entity_states_to_words entities) =
-  Some (entities, []).
-Proof.
-  induction entities as [| es rest IH].
-  - reflexivity.
-  - cbn [length entity_states_from_words_aux entity_states_to_words].
-    rewrite entity_state_roundtrip.
-    rewrite IH. reflexivity.
-Qed.
 
 (** [game_state_to_words] round-trips through [game_state_from_words]. *)
-Lemma game_state_roundtrip : forall gs,
-  game_state_from_words (game_state_to_words gs) = Some gs.
-Proof.
-  intros gs.
-  destruct gs as [[px py pz] [vx vy vz] yaw pitch grounded ents tick].
-  (* Destruct each Q into num/den so Z.to_pos (Z.pos den) = den by reflexivity. *)
-  destruct px as [pxn pxd], py as [pyn pyd], pz as [pzn pzd].
-  destruct vx as [vxn vxd], vy as [vyn vyd], vz as [vzn vzd].
-  destruct yaw as [yn yd], pitch as [pn pd].
-  unfold game_state_to_words, game_state_from_words, q_words. simpl.
-  repeat rewrite Z_pos_leb_0. simpl.
-  assert ((Z.of_nat (length ents) <? 0) = false) as Hcount.
-  { apply Z.ltb_ge. lia. }
-  rewrite Hcount. simpl.
-  rewrite Nat2Z.id.
-  rewrite entity_states_roundtrip.
-  destruct grounded; reflexivity.
-Qed.
 
 (** Serialized word count includes the per-entity payload. *)
-Lemma initial_game_state_words_from_entities_length : forall entities,
-  length (initial_game_state_words_from_entities entities) =
-  (game_state_words_count +
-   entity_state_words_count *
-   length (gs_entities (game_state_from_entities entities)))%nat.
-Proof.
-  intros entities. unfold initial_game_state_words_from_entities.
-  apply game_state_to_words_length.
-Qed.
 
-Lemma point_collides_worldb_empty : forall pos,
-  point_collides_worldb collision_world_empty pos = false.
-Proof. reflexivity. Qed.
 
 Definition sample_solid_texture : collision_texture_input :=
   mk_collision_texture_input contents_solid.
@@ -2192,99 +1736,13 @@ Definition sample_trigger_world : collision_world_input :=
     ; mk_collision_brush_side_input 5
     ].
 
-Lemma step_world_in_world_empty_applies_gravity :
-  let stepped :=
-    step_world_in_world collision_world_empty game_state_init
-      (mk_input_snapshot false false false false false 0%Q 0%Q 1000) in
-  v3_z (gs_position stepped) == -800 /\ gs_on_ground stepped = false.
-Proof. vm_compute. split; reflexivity. Qed.
 
-Lemma step_world_in_world_grounded_jump_example :
-  let stepped :=
-    step_world_in_world sample_floor_world
-      (mk_game_state (mk_vec3 0 0 17) vec3_zero 0 0 false [] 0)
-      (mk_input_snapshot false false false false true 0%Q 0%Q 100) in
-  v3_z (gs_position stepped) == 44 /\
-  v3_z (gs_velocity stepped) == jump_speed /\
-  gs_on_ground stepped = false.
-Proof. vm_compute. repeat split; reflexivity. Qed.
 
-Lemma brush_blocks_playerb_sample_solid :
-  brush_blocks_playerb [sample_solid_texture] (mk_collision_brush_input 0 6 0) = true.
-Proof. vm_compute. reflexivity. Qed.
 
-Lemma point_collides_worldb_sample_floor_contact :
-  point_collides_worldb sample_floor_world (mk_vec3 0 0 16) = true.
-Proof. vm_compute. reflexivity. Qed.
 
-Lemma grounded_by_worldb_sample_floor :
-  grounded_by_worldb sample_floor_world (mk_vec3 0 0 17) = true.
-Proof. vm_compute. reflexivity. Qed.
 
-Lemma point_collides_worldb_sample_wall :
-  point_collides_worldb sample_wall_world (mk_vec3 16 0 128) = true.
-Proof. vm_compute. reflexivity. Qed.
 
-Lemma point_collides_modelb_sample_trigger :
-  point_collides_modelb sample_trigger_world (mk_vec3 0 0 16)
-    (mk_collision_model_input 0 1) = true.
-Proof. vm_compute. reflexivity. Qed.
 
-Lemma apply_trigger_pushes_single_outside : forall world pos es,
-  entity_inside_trigger_modelb world pos es = false ->
-  apply_trigger_pushes world pos [es] =
-  (None,
-   [mk_entity_state
-      (es_entity_index es)
-      (es_model_index es)
-      (es_origin es)
-      true]).
-Proof.
-  intros world pos [entity_index model_index [ox oy oz] active] Hinside.
-  simpl in *. rewrite Hinside. destruct active; reflexivity.
-Qed.
 
-Lemma apply_trigger_pushes_single_inside_active : forall world pos es,
-  entity_inside_trigger_modelb world pos es = true ->
-  es_active es = true ->
-  apply_trigger_pushes world pos [es] =
-  (Some (trigger_push_velocity pos (es_origin es)),
-   [mk_entity_state
-      (es_entity_index es)
-      (es_model_index es)
-      (es_origin es)
-      false]).
-Proof.
-  intros world pos [entity_index model_index [ox oy oz] active] Hinside Hactive.
-  simpl in *. subst active. rewrite Hinside. reflexivity.
-Qed.
 
-Lemma apply_trigger_pushes_single_inside_inactive : forall world pos es,
-  entity_inside_trigger_modelb world pos es = true ->
-  es_active es = false ->
-  apply_trigger_pushes world pos [es] =
-  (None,
-   [mk_entity_state
-      (es_entity_index es)
-      (es_model_index es)
-      (es_origin es)
-      false]).
-Proof.
-  intros world pos [entity_index model_index [ox oy oz] active] Hinside Hactive.
-  simpl in *. subst active. rewrite Hinside. reflexivity.
-Qed.
 
-Lemma step_world_in_world_trigger_push_example :
-  let stepped :=
-    step_world_in_world sample_trigger_world
-      (mk_game_state
-         (mk_vec3 0 0 16)
-         vec3_zero
-         0 0 false
-         [mk_entity_state 0 0 (mk_vec3 0 0 256) true]
-         0)
-      input_snapshot_zero in
-  v3_z (gs_velocity stepped) == 640 /\
-  gs_on_ground stepped = false /\
-  gs_entities stepped = [mk_entity_state 0 0 (mk_vec3 0 0 256) false].
-Proof. vm_compute. repeat split; reflexivity. Qed.

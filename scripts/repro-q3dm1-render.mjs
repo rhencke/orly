@@ -259,6 +259,14 @@ async function gatherSnapshot(page) {
     const overlay = document.getElementById('game-overlay');
     const main = document.getElementById('main');
     const jscoqPanel = document.getElementById('jscoq-panel');
+    const ideWrapper = document.getElementById('ide-wrapper');
+    const jscoqEditor = document.getElementById('document');
+    const panelWrapper = document.getElementById('panel-wrapper');
+    const toolbar = document.getElementById('toolbar');
+    const goalPanel = document.getElementById('goal-panel');
+    const queryPanel = document.getElementById('query-panel');
+    const packagesPanel = document.getElementById('packages-panel');
+    const helpPanel = document.getElementById('help-panel');
     const resizeHandle = document.getElementById('resize-handle');
     const touchControls = document.getElementById('touch-controls');
     const movePad = document.querySelector('[data-touch-control="move-pad"]');
@@ -310,8 +318,20 @@ async function gatherSnapshot(page) {
       };
     }
 
+    function flexPanelState(element) {
+      if (!element) return null;
+      const panel = element.closest('.flex-panel') ?? element;
+      return {
+        rect: rectOf(element),
+        panelRect: rectOf(panel),
+        className: panel.className,
+        collapsed: panel.classList.contains('collapsed'),
+      };
+    }
+
     const overlayStyle = overlay ? window.getComputedStyle(overlay) : null;
     const mainStyle = main ? window.getComputedStyle(main) : null;
+    const ideWrapperStyle = ideWrapper ? window.getComputedStyle(ideWrapper) : null;
 
     return {
       viewport: {
@@ -375,6 +395,33 @@ async function gatherSnapshot(page) {
       jscoqPanel: jscoqPanel
         ? {
             rect: rectOf(jscoqPanel),
+            ideWrapper: ideWrapper
+              ? {
+                  rect: rectOf(ideWrapper),
+                  display: ideWrapperStyle?.display ?? '',
+                  flexDirection: ideWrapperStyle?.flexDirection ?? '',
+                }
+              : null,
+            editor: jscoqEditor
+              ? {
+                  rect: rectOf(jscoqEditor),
+                }
+              : null,
+            panelWrapper: panelWrapper
+              ? {
+                  rect: rectOf(panelWrapper),
+                }
+              : null,
+            toolbar: toolbar
+              ? {
+                  rect: rectOf(toolbar),
+                  buttonCount: toolbar.querySelectorAll('#buttons button').length,
+                }
+              : null,
+            goalPanel: flexPanelState(goalPanel),
+            queryPanel: flexPanelState(queryPanel),
+            packagesPanel: flexPanelState(packagesPanel),
+            helpPanel: flexPanelState(helpPanel),
           }
         : null,
       resizeHandle: resizeHandle
@@ -688,6 +735,79 @@ function assertTouchTarget(name, rect) {
   }
 }
 
+function assertCollapsedFlexPanel(name, panel) {
+  if (!panel) {
+    throw new Error(`${name} diagnostics missing`);
+  }
+  if (!panel.collapsed) {
+    throw new Error(`${name} should start collapsed on mobile`);
+  }
+  if ((panel.rect?.height ?? 0) > 2) {
+    throw new Error(`${name} content stayed open on mobile`);
+  }
+}
+
+function assertMobileLowerPanelUsability(snapshot, orientation) {
+  const jscoqPanel = snapshot.jscoqPanel;
+  const panelRect = jscoqPanel?.rect;
+  const layout = jscoqPanel?.ideWrapper;
+  const editorRect = jscoqPanel?.editor?.rect;
+  const panelWrapperRect = jscoqPanel?.panelWrapper?.rect;
+  const toolbar = jscoqPanel?.toolbar;
+  const toolbarRect = toolbar?.rect;
+  const goalPanel = jscoqPanel?.goalPanel;
+
+  if (!panelRect || !layout || !editorRect || !panelWrapperRect || !toolbarRect || !goalPanel?.rect) {
+    throw new Error('mobile lower-panel diagnostics missing');
+  }
+
+  if (layout.display !== 'flex' || layout.flexDirection !== 'column') {
+    throw new Error(
+      `mobile lower panel should stack beneath the editor, got ${layout.display}/${layout.flexDirection}`
+    );
+  }
+
+  if (panelWrapperRect.top < layout.rect.top + layout.rect.height * 0.35) {
+    throw new Error('mobile lower panel did not move into the lower portion of the card');
+  }
+
+  if (panelWrapperRect.width < panelRect.width * 0.8) {
+    throw new Error('mobile lower panel lost too much horizontal space');
+  }
+
+  if (Math.abs(panelWrapperRect.width - editorRect.width) > 24) {
+    throw new Error('mobile lower panel width drifted too far from the editor width');
+  }
+
+  if (panelWrapperRect.height < 96) {
+    throw new Error('mobile lower panel became too short to be useful');
+  }
+
+  const maxPanelFraction = orientation === 'portrait' ? 0.72 : 0.6;
+  if (panelWrapperRect.height > panelRect.height * maxPanelFraction) {
+    throw new Error(`${orientation} lower panel consumed too much of the phone panel`);
+  }
+
+  if (toolbarRect.height < 28 || toolbarRect.height > 52) {
+    throw new Error(`mobile lower-panel toolbar height is out of bounds: ${toolbarRect.height}`);
+  }
+
+  if ((toolbar.buttonCount ?? 0) < 4) {
+    throw new Error('mobile lower-panel toolbar is missing core controls');
+  }
+
+  if (goalPanel.rect.height < 44) {
+    throw new Error('mobile lower-panel goal area became too small to read');
+  }
+
+  assertCollapsedFlexPanel('mobile message panel', jscoqPanel.queryPanel);
+  assertCollapsedFlexPanel('mobile packages panel', jscoqPanel.packagesPanel);
+
+  if (!jscoqPanel.helpPanel?.collapsed) {
+    throw new Error('mobile help panel should start collapsed');
+  }
+}
+
 function assertMobileRenderStartupScenario(snapshot, consoleEvents, orientation) {
   assertRenderStartupScenario(snapshot, consoleEvents);
   if (!snapshot.pointer?.coarse) {
@@ -740,6 +860,8 @@ function assertMobileRenderStartupScenario(snapshot, consoleEvents, orientation)
       throw new Error('landscape canvas became too narrow for playability');
     }
   }
+
+  assertMobileLowerPanelUsability(snapshot, orientation);
 }
 
 function assertErrorOverlayCopyScenario(snapshot, consoleEvents, interactions) {

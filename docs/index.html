@@ -17,6 +17,12 @@
   -->
   <script src="coi-serviceworker.js"></script>
 
+  <!--
+    JsCoq's ESM entrypoint does not auto-attach its frontend stylesheet.
+    Load it explicitly so the IDE panel uses the intended split layout.
+  -->
+  <link rel="stylesheet" href="./vendor/jscoq/dist/frontend/index.css">
+
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -383,6 +389,190 @@
     #ide-wrapper {
       width: 100%;
       height: 100%;
+    }
+
+    @media (pointer: coarse) and (max-width: 767px), (orientation: landscape) and (max-height: 560px) {
+      #jscoq-panel {
+        padding:
+          0.55rem
+          max(0.55rem, env(safe-area-inset-right))
+          max(0.7rem, env(safe-area-inset-bottom))
+          max(0.55rem, env(safe-area-inset-left));
+        border-top: none;
+        background: linear-gradient(180deg, rgb(15 20 38 / 98%), rgb(8 11 22 / 98%));
+      }
+
+      #jscoq-panel #ide-wrapper {
+        height: 100%;
+        overflow: hidden;
+        border: 1px solid rgb(160 196 255 / 16%);
+        border-radius: 1rem;
+        background: #f7f9ff;
+        box-shadow: 0 -18px 36px rgb(0 0 0 / 32%);
+      }
+
+      #jscoq-panel #ide-wrapper.layout-flex {
+        flex-direction: column;
+        justify-content: stretch;
+        align-items: stretch;
+      }
+
+      #jscoq-panel #ide-wrapper.layout-flex > *:not(#panel-wrapper):not(#outline-pane):not(.CodeMirror-hints) {
+        width: 100%;
+        min-width: 0;
+      }
+
+      #jscoq-panel #ide-wrapper.layout-flex > #panel-wrapper {
+        flex: 0 0 clamp(8.75rem, 42%, 14rem);
+        width: 100%;
+        max-width: none;
+      }
+
+      #jscoq-panel #panel-wrapper {
+        width: 100%;
+        max-width: none;
+        min-width: 0;
+        border-top: 1px solid #d7deef;
+        border-left: none;
+      }
+
+      #jscoq-panel #document {
+        margin: 0;
+        max-width: none;
+        padding: 0.65rem 0.65rem 0.5rem;
+      }
+
+      #jscoq-panel #document .CodeMirror {
+        margin-bottom: 0;
+        border-radius: 0.75rem;
+        overflow: hidden;
+      }
+
+      #jscoq-panel #toolbar {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        height: 42px;
+        padding: 0 0.45rem;
+        border-bottom: 1px solid #d7deef;
+        background: linear-gradient(180deg, #fdfdff, #eef3ff);
+      }
+
+      #jscoq-panel #toolbar .exits {
+        display: flex;
+        align-items: center;
+        gap: 0.25rem;
+        padding-left: 0;
+      }
+
+      #jscoq-panel #toolbar .exits.right {
+        position: static;
+        top: auto;
+        right: auto;
+        margin-left: auto;
+      }
+
+      #jscoq-panel #toolbar .coq-logo,
+      #jscoq-panel #toolbar .js-logo,
+      #jscoq-panel #toolbar .wa-logo,
+      #jscoq-panel #toolbar .exits > i {
+        display: none;
+      }
+
+      #jscoq-panel #buttons {
+        display: flex;
+        align-items: center;
+        gap: 0.25rem;
+        margin-top: 0;
+        padding-left: 0;
+      }
+
+      #jscoq-panel #buttons button {
+        width: 28px;
+        height: 28px;
+        border-radius: 0.7rem;
+        background-color: #f7f9ff;
+        background-position: center;
+        background-repeat: no-repeat;
+        background-size: 72%;
+        box-shadow: inset 0 0 0 1px rgb(19 38 79 / 10%);
+      }
+
+      #jscoq-panel #toolbar svg.app-menu-button {
+        width: 30px;
+        height: 30px;
+        padding: 0.2rem;
+        border-radius: 0.7rem;
+        fill: #496492;
+      }
+
+      #jscoq-panel .flex-container {
+        height: calc(100% - 42px);
+      }
+
+      #jscoq-panel .flex-panel > .caption {
+        flex-basis: 28px;
+        min-height: 28px;
+        padding: 0.45rem 1.8rem 0.35rem 0.75rem;
+        font-size: 0.75rem;
+        font-weight: 600;
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+        background: #e8eef9;
+      }
+
+      #jscoq-panel .flex-panel > .caption:after {
+        top: 6px;
+        right: 9px;
+        border-top-width: 6px;
+        border-right-width: 6px;
+        border-bottom-width: 6px;
+        border-right-color: #6c7ca0;
+      }
+
+      #jscoq-panel .flex-panel > .caption select {
+        margin-left: 0.5rem;
+        font-size: 0.72rem;
+      }
+
+      #jscoq-panel .flex-panel > .content {
+        padding: 0 0.55rem;
+        font-size: 0.8rem;
+        line-height: 1.35;
+      }
+
+      #jscoq-panel #goal-panel:not(.collapsed) {
+        flex-grow: 1200;
+      }
+
+      #jscoq-panel #goal-panel .splash-middle,
+      #jscoq-panel #goal-panel p.system,
+      #jscoq-panel #goal-panel .quick-links {
+        display: none;
+      }
+
+      #jscoq-panel #goal-panel p.splash-above {
+        margin: 0.75rem 0 0;
+        padding: 0 0.75rem;
+        font-size: 0.68rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #6c7ca0;
+      }
+
+      #jscoq-panel #goal-panel p.splash-below {
+        margin: 0;
+        padding: 0.5rem 0.75rem 0.75rem;
+        font-size: 0.78rem;
+        line-height: 1.4;
+      }
+
+      #jscoq-panel #query-panel > div {
+        padding-left: 1.1rem;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        background-size: 12px;
+      }
     }
 
     /* ══════════════════════════════════════════════════════════
@@ -1227,6 +1417,51 @@
       return null;
     }
 
+    const MOBILE_JSCOQ_QUERY = '(pointer: coarse) and (max-width: 1023px)';
+    const mobileJsCoqQuery = window.matchMedia(MOBILE_JSCOQ_QUERY);
+
+    function setJsCoqLogLevel(layout, level) {
+      if (!layout || typeof layout.filterLog !== 'function') return;
+      layout.filterLog(level);
+
+      const select = layout.panel?.querySelector?.('select[name="msg_filter"]');
+      if (!select) return;
+
+      const optionValue = typeof level === 'string'
+        ? layout.log_levels?.indexOf(level)
+        : level;
+      if (Number.isInteger(optionValue) && optionValue >= 0) {
+        select.value = String(optionValue);
+      }
+    }
+
+    function collapseJsCoqFlexPanel(root, selector) {
+      const panel = root.querySelector(selector)?.closest('.flex-panel');
+      if (panel) panel.classList.add('collapsed');
+    }
+
+    function reinforceMobileJsCoqDefaults(coq, remainingPasses = 5) {
+      applyMobileJsCoqDefaults(coq);
+      if (remainingPasses <= 1) return;
+      window.setTimeout(() => {
+        reinforceMobileJsCoqDefaults(coq, remainingPasses - 1);
+      }, 150);
+    }
+
+    function applyMobileJsCoqDefaults(coq) {
+      if (!mobileJsCoqQuery.matches) return;
+
+      const layout = coq?.layout;
+      const panelRoot = layout?.panel;
+      if (!layout || !panelRoot) return;
+
+      layout.hideHelp?.();
+      setJsCoqLogLevel(layout, 0);
+      collapseJsCoqFlexPanel(panelRoot, '#help-panel');
+      collapseJsCoqFlexPanel(panelRoot, '.msg-area');
+      collapseJsCoqFlexPanel(panelRoot, '#packages-panel');
+    }
+
     let jscoqOk = false;
     let rocqBridge = null;
     let rocqBridgeWarmup = null;
@@ -1266,6 +1501,10 @@
           all_pkgs:      ['coq'],
         }
       );
+      reinforceMobileJsCoqDefaults(coq);
+      coq.when_ready?.then(() => {
+        reinforceMobileJsCoqDefaults(coq);
+      });
       rocqBridge = createRocqBridge(coq, {
         onDiagnostic: recordRocqSyncDiagnostic,
       });

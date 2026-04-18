@@ -80,7 +80,15 @@ export function createRocqBridge(_manager, options = {}) {
       emit('load_world:requested', {
         faceCount: visibleFaces.length,
       });
+      emit('load_world:received', {});
       const nextSnapshot = snapshot();
+      emit('load_world:decoded', {
+        gsWordCount: 0,
+        visibleFaceCount: nextSnapshot.visibleFaces.length,
+      });
+      emit('load_world:snapshot_built', {
+        visibleFaceCount: nextSnapshot.visibleFaces.length,
+      });
       emit('load_world:complete', {
         visibleFaceCount: nextSnapshot.visibleFaces.length,
       });
@@ -242,8 +250,20 @@ async function runMissingSentencePromiseRegression() {
     if (stages[0] !== 'load_world:requested') {
       throw new Error(`unexpected first regression stage: ${stages[0] ?? '(missing)'}`);
     }
+    if (!stages.includes('rocq:alive')) {
+      throw new Error('helper readiness regression never received rocq:alive heartbeat');
+    }
     if (!stages.includes('load_world:helpers-ready')) {
       throw new Error('helper readiness regression never reached load_world:helpers-ready');
+    }
+    if (!stages.includes('load_world:received')) {
+      throw new Error('helper readiness regression never reached load_world:received');
+    }
+    if (!stages.includes('load_world:decoded')) {
+      throw new Error('helper readiness regression never reached load_world:decoded');
+    }
+    if (!stages.includes('load_world:snapshot_built')) {
+      throw new Error('helper readiness regression never reached load_world:snapshot_built');
     }
     if (!stages.includes('load_world:complete')) {
       throw new Error('helper readiness regression never reached load_world:complete');

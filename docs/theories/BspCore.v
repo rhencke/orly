@@ -940,7 +940,7 @@ Lemma extract_snapshot_entity_count : forall gs,
   length (gs_entities gs).
 Proof.
   intros gs. unfold extract_snapshot. simpl.
-  apply length_map.
+  apply map_length.
 Qed.
 
 (** The camera position in the snapshot matches the game state. *)

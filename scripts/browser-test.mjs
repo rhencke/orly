@@ -594,6 +594,7 @@ async function createScenarioRoot(scenarioName) {
 
   if (scenarioName === 'licensed-map-render-startup' ||
       scenarioName === 'licensed-map-parse-handoff' ||
+      scenarioName === 'full-theory-with-proofs-compiles' ||
       scenarioName === 'rocq-sync-timeout-overlay' ||
       scenarioName === 'slow-compile-overlay') {
     await fs.mkdir(path.join(rootDir, 'assets', 'maps'), { recursive: true });
@@ -1032,8 +1033,8 @@ function detectStalledBspParse(snapshot) {
   return `bsp-parse-stalled: ${summarizeBspParseState(snapshot)}`;
 }
 
-async function waitForScenario(page, consoleEvents, predicate, timeoutFailure = null, stopOnFailure = true) {
-  const deadline = Date.now() + TIMEOUT_MS;
+async function waitForScenario(page, consoleEvents, predicate, timeoutFailure = null, stopOnFailure = true, timeoutMs = TIMEOUT_MS) {
+  const deadline = Date.now() + timeoutMs;
   let snapshot = await gatherSnapshotWithRetry(page);
 
   while (Date.now() < deadline) {
@@ -1358,6 +1359,50 @@ function assertRealBridgeParseHandoffScenario(snapshot, consoleEvents) {
 
   if (!hasEvent(consoleEvents, /orly: parsed BSP/i)) {
     throw new Error('console never reported a parsed BSP before the Rocq handoff');
+  }
+}
+
+// Asserts that the full BspCore.v theory — proofs included — compiled
+// successfully under JsCoq.
+// Key check:
+//   • load_world:helpers-ready fired.  ensureBridgeHelpersReady steps through
+//     every sentence in dependency order and throws immediately on any
+//     SENTENCE_PHASE_ERROR, so helpers-ready can only fire after every
+//     sentence in the theory — definitions and proof lemmas alike — compiled
+//     without a Rocq error.
+//
+// Why no compile:sentence count check:
+//   beginRocqSyncDiagnostics (called at the start of load_world) resets the
+//   events array.  Most compile:sentence events occur during prepare(), which
+//   runs in parallel with asset loading and completes before load_world even
+//   starts on fast hardware.  After the reset only the tail-end events (if
+//   any) are captured, so the count is not a reliable indicator.
+//
+// Render completion (placeholder hidden, canvas live, load_world:complete) is
+// intentionally NOT checked here.  On constrained CI hardware the Rocq
+// eval queries that follow helpers-ready can take longer than the 60 s
+// inactivity timeout, causing a render-startup-failed that has nothing to do
+// with theory correctness.  Render startup is covered by the dedicated
+// licensed-map render-startup scenarios.
+function assertFullTheoryWithProofsCompilesScenario(snapshot, consoleEvents) {
+  if (!snapshot.jscoqLoaded) {
+    throw new Error('full-theory compile: JsCoq editor did not load');
+  }
+
+  const events = Array.isArray(snapshot.rocqSyncDiagnostics?.events)
+    ? snapshot.rocqSyncDiagnostics.events
+    : [];
+
+  if (!events.some(e => e.stage === 'load_world:helpers-ready')) {
+    // Surface any non-render failure to give a meaningful diagnosis.
+    const failure = detectFailure(snapshot, consoleEvents);
+    if (failure && !failure.startsWith('render-startup-failed')) {
+      throw new Error(`full-theory compile: ${failure}`);
+    }
+    throw new Error(
+      'full-theory compile: load_world:helpers-ready never fired — ' +
+      'theory did not finish compiling or JsCoq worker stalled'
+    );
   }
 }
 
@@ -2054,7 +2099,8 @@ async function runScenario(browser, scenario, outDir, port) {
       consoleEvents,
       readyWhen,
       scenario.timeoutFailure ?? null,
-      scenario.stopOnFailure ?? true
+      scenario.stopOnFailure ?? true,
+      scenario.timeoutMs ?? TIMEOUT_MS
     );
 
     interactions = {
@@ -2255,6 +2301,41 @@ async function main() {
           },
           assert(snapshot, consoleEvents) {
             assertRocqSyncActivityTimeoutScenario(snapshot, consoleEvents);
+          },
+        },
+        {
+          // Verifies that BspCore.v — proofs included — compiles to
+          // completion in JsCoq without errors.  Uses the real
+          // rocq_bridge.js and the real BSP map so the Rocq sync
+          // diagnostic events flow (compile:sentence, helpers-ready).
+          //
+          // readyWhen fires as soon as load_world:helpers-ready appears,
+          // which means every bridge-helper definition was compiled
+          // successfully.  We stop there deliberately: the Rocq eval
+          // queries that follow helpers-ready can exceed the 60 s
+          // inactivity timer on slow CI hardware, making the render
+          // timeout fire even though theory compilation succeeded.
+          // Render startup is validated separately by the
+          // licensed-map-render-startup-desktop scenario.
+          //
+          // In CI the theory takes ~230 s to compile.  timeoutMs is set
+          // to 5 minutes so headless CI has breathing room.
+          name: 'full-theory-with-proofs-compiles',
+          rootScenario: 'full-theory-with-proofs-compiles',
+          contextOptions: {
+            viewport: { width: 1280, height: 720 },
+          },
+          timeoutMs: 300000,
+          readyWhen(current) {
+            // Stop as soon as the bridge helpers are compiled — that
+            // proves the full theory (proofs included) compiled cleanly.
+            return Array.isArray(current.rocqSyncDiagnostics?.events) &&
+              current.rocqSyncDiagnostics.events.some(
+                e => e.stage === 'load_world:helpers-ready'
+              );
+          },
+          assert(snapshot, consoleEvents) {
+            assertFullTheoryWithProofsCompilesScenario(snapshot, consoleEvents);
           },
         },
         {

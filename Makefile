@@ -34,6 +34,16 @@ THEORIES := \
 # JsCoq 0.17.1 runs Rocq 8.17.1 and cannot load pre-compiled .vo
 # packages built with our system Rocq 9.x; this flat-file approach
 # lets JsCoq compile the theories on the fly using only the stdlib.
+#
+# Proofs (Lemma/Theorem blocks) are included in the bundle so users can
+# examine proof terms in the JsCoq IDE while they play.
+#
+# One Rocq 9.x → 8.17 compatibility fix is applied: `length_map` was
+# introduced as the canonical name in Rocq 8.20; JsCoq's older stdlib
+# only has `map_length` (deprecated in 9.x).  The sed pass below
+# rewrites every `apply length_map` and `rewrite length_map` occurrence
+# to the 8.17-compatible form so the full proof bundle compiles cleanly
+# under JsCoq.
 DOCS_THEORIES_DIR = docs/theories
 BSP_CORE_SRCS     = theories/BspBinary.v theories/BspEntity.v theories/GameState.v
 BSP_CORE_V        = $(DOCS_THEORIES_DIR)/BspCore.v
@@ -47,7 +57,8 @@ PAGES_MANIFEST    = $(ASSETS_DIR)/manifest.json
 $(BSP_CORE_V): $(BSP_CORE_SRCS)
 	mkdir -p $(DOCS_THEORIES_DIR)
 	{ cat $(BSP_CORE_SRCS); } \
-	  | sed -E '/^From Bsp Require Import /d; s/^From Stdlib Require Import ([^.]+)\.$$/Require Import \1./' > $@
+	  | sed -E '/^From Bsp Require Import /d; s/^From Stdlib Require Import ([^.]+)\.$$/Require Import \1./; s/\bapply length_map\b/apply map_length/g; s/\brewrite length_map\b/rewrite map_length/g' \
+	  > $@
 
 browser-theories: $(BSP_CORE_V)
 

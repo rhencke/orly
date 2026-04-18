@@ -293,12 +293,30 @@ async function waitForManagerReady(manager) {
   }
 }
 
-async function waitForSentenceProcessed(sentence, sid) {
+function extractSentenceFeedback(manager, sentence) {
+  try {
+    if (!Array.isArray(sentence?.feedback) || !manager?.pprint?.pp2Text) return '';
+    return sentence.feedback
+      .map(fb => {
+        try { return manager.pprint.pp2Text(fb.msg); } catch (_) { return ''; }
+      })
+      .filter(Boolean)
+      .join('\n');
+  } catch (_) {
+    return '';
+  }
+}
+
+async function waitForSentenceProcessed(sentence, sid, manager) {
   while (true) {
     const phase = typeof sentence?.phase === 'string' ? sentence.phase : '';
     if (phase === SENTENCE_PHASE_PROCESSED) return;
     if (phase === SENTENCE_PHASE_ERROR || phase === SENTENCE_PHASE_CANCELLING) {
-      throw new Error(`Rocq sentence ${sid} stopped before it finished processing (phase: ${phase})`);
+      const feedback = phase === SENTENCE_PHASE_ERROR
+        ? extractSentenceFeedback(manager, sentence)
+        : '';
+      const detail = feedback || `phase: ${phase}`;
+      throw new Error(`Rocq sentence ${sid} stopped before it finished processing: ${detail}`);
     }
     await nextTick();
   }
@@ -310,7 +328,7 @@ async function ensureBridgeHelpersReady(manager, emit) {
   let sentence = manager.doc.sentences.find(stm =>
     stm.coq_sid && stm.text.includes(BRIDGE_HELPERS_DEFINITION));
   if (sentence) {
-    await waitForSentenceProcessed(sentence, sentence.coq_sid);
+    await waitForSentenceProcessed(sentence, sentence.coq_sid, manager);
     return sentence.coq_sid;
   }
 
@@ -322,7 +340,7 @@ async function ensureBridgeHelpersReady(manager, emit) {
   while (manager.goNext(false)) {
     sentence = manager.doc.sentences[manager.doc.sentences.length - 1];
     const sid = await waitForSentenceSid(sentence);
-    await waitForSentenceProcessed(sentence, sid);
+    await waitForSentenceProcessed(sentence, sid, manager);
     sentenceIndex++;
     const isTarget = sentence.text.includes(BRIDGE_HELPERS_DEFINITION);
     emitDiagnostic(emit, 'compile:sentence', { sid, sentenceIndex, isTarget });

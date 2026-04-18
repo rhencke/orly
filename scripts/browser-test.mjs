@@ -147,6 +147,92 @@ export function createRocqBridge(_manager, options = {}) {
 }
 `;
 
+// Bridge that simulates slow theory compilation by emitting compile:sentence
+// events at 100 ms intervals (6 sentences, 600 ms total) before completing.
+// With rocq_sync_timeout_ms=500 a flat withTimeout would fire at 500 ms and
+// kill the load mid-compile; withActivityTimeout resets on every event and
+// lets it finish.  Used by the activity-timeout and progress-overlay tests.
+const SLOW_COMPILE_BRIDGE_SOURCE = `
+const VIEW_MATRIX = [1, 0, 0, 0,
+                     0, 1, 0, 0,
+                     0, 0, 1, 0,
+                     0, 0, 0, 1];
+
+export function createRocqBridge(_manager, options = {}) {
+  let visibleFaces = [];
+  const onDiagnostic =
+    typeof options?.onDiagnostic === 'function' ? options.onDiagnostic : null;
+
+  function emit(stage, payload = {}) {
+    onDiagnostic?.({
+      stage,
+      at: new Date().toISOString(),
+      payload,
+    });
+  }
+
+  function snapshot() {
+    return {
+      position: { x: 0, y: 0, z: 0 },
+      yaw: 0,
+      pitch: 0,
+      visibleFaces: [...visibleFaces],
+      viewMatrix: new Float32Array(VIEW_MATRIX),
+    };
+  }
+
+  return {
+    version: 1,
+
+    async prepare() {},
+
+    async load_world(world) {
+      visibleFaces = Array.isArray(world?.faces)
+        ? world.faces.map((_, fi) => fi)
+        : [];
+      emit('load_world:requested', { faceCount: visibleFaces.length });
+
+      // Simulate six sentences compiling at 100 ms intervals.
+      // Total theory-compile window: 600 ms.  The activity-based timeout
+      // (withActivityTimeout) resets on each compile:sentence event so the
+      // load is never killed mid-compile even with rocq_sync_timeout_ms=500.
+      const SENTENCE_COUNT = 6;
+      for (let i = 1; i <= SENTENCE_COUNT; i++) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        emit('compile:sentence', {
+          sid: i,
+          sentenceIndex: i,
+          isTarget: i === SENTENCE_COUNT,
+        });
+      }
+
+      const nextSnapshot = snapshot();
+      emit('load_world:helpers-ready', { sid: SENTENCE_COUNT });
+      emit('load_world:received', { sid: SENTENCE_COUNT });
+      emit('load_world:decoded', {
+        gsWordCount: 0,
+        visibleFaceCount: nextSnapshot.visibleFaces.length,
+      });
+      emit('load_world:snapshot_built', {
+        visibleFaceCount: nextSnapshot.visibleFaces.length,
+      });
+      emit('load_world:complete', {
+        visibleFaceCount: nextSnapshot.visibleFaces.length,
+      });
+      return nextSnapshot;
+    },
+
+    async step() {
+      return snapshot();
+    },
+
+    async reset() {
+      return snapshot();
+    },
+  };
+}
+`;
+
 async function withNodeTimeout(promise, timeoutMs, message) {
   let timeoutId = null;
   try {
@@ -508,7 +594,8 @@ async function createScenarioRoot(scenarioName) {
 
   if (scenarioName === 'licensed-map-render-startup' ||
       scenarioName === 'licensed-map-parse-handoff' ||
-      scenarioName === 'rocq-sync-timeout-overlay') {
+      scenarioName === 'rocq-sync-timeout-overlay' ||
+      scenarioName === 'slow-compile-overlay') {
     await fs.mkdir(path.join(rootDir, 'assets', 'maps'), { recursive: true });
     await fs.writeFile(
       path.join(rootDir, 'assets', 'manifest.json'),
@@ -517,11 +604,14 @@ async function createScenarioRoot(scenarioName) {
     await fs.copyFile(LICENSED_MAP_SOURCE, path.join(rootDir, 'assets', LICENSED_MAP_PATH));
   }
 
-  if (scenarioName === 'licensed-map-render-startup' || scenarioName === 'rocq-sync-timeout-overlay') {
-    await fs.writeFile(
-      path.join(rootDir, 'rocq_bridge.js'),
-      scenarioName === 'rocq-sync-timeout-overlay' ? HANGING_BRIDGE_SOURCE : STUB_BRIDGE_SOURCE
-    );
+  if (scenarioName === 'licensed-map-render-startup' ||
+      scenarioName === 'rocq-sync-timeout-overlay' ||
+      scenarioName === 'slow-compile-overlay') {
+    const bridgeSource =
+      scenarioName === 'rocq-sync-timeout-overlay' ? HANGING_BRIDGE_SOURCE :
+      scenarioName === 'slow-compile-overlay'       ? SLOW_COMPILE_BRIDGE_SOURCE :
+                                                      STUB_BRIDGE_SOURCE;
+    await fs.writeFile(path.join(rootDir, 'rocq_bridge.js'), bridgeSource);
   }
 
   return rootDir;
@@ -1661,6 +1751,88 @@ function assertRocqSyncTimeoutScenario(snapshot, consoleEvents, interactions) {
   }
 }
 
+// Asserts that the activity-based Rocq sync timeout did NOT fire prematurely
+// for a slow-but-progressing compilation.  The SLOW_COMPILE_BRIDGE_SOURCE
+// emits 6 compile:sentence events at 100 ms intervals (600 ms total); with
+// rocq_sync_timeout_ms=500 a flat withTimeout would kill it, but
+// withActivityTimeout resets on each event and allows completion.
+function assertRocqSyncActivityTimeoutScenario(snapshot, consoleEvents) {
+  const failure = detectFailure(snapshot, consoleEvents);
+  if (failure) {
+    throw new Error(`activity timeout regression unexpectedly detected failure: ${failure}`);
+  }
+  // Overlay must be hidden — render started, timeout did not fire.
+  if (snapshot.placeholder?.hidden !== true) {
+    throw new Error(
+      `activity timeout: overlay still visible after load_world should have completed — ` +
+      `state=${snapshot.placeholder?.state ?? '(missing)'}, ` +
+      `detail="${snapshot.placeholder?.detail ?? '(empty)'}"`
+    );
+  }
+  // Diagnostics state must be 'ready', not 'timed-out'.
+  if (snapshot.rocqSyncDiagnostics?.state !== 'ready') {
+    throw new Error(
+      `activity timeout: expected rocq sync diagnostics state 'ready', ` +
+      `got '${snapshot.rocqSyncDiagnostics?.state ?? '(missing)'}'`
+    );
+  }
+  // Event history must include at least one compile:sentence event — proves
+  // the events arrived and were recorded (not silently dropped).
+  const events = Array.isArray(snapshot.rocqSyncDiagnostics?.events)
+    ? snapshot.rocqSyncDiagnostics.events
+    : [];
+  if (!events.some(e => e.stage === 'compile:sentence')) {
+    const stages = events.map(e => e.stage).join(', ') || '(none)';
+    throw new Error(
+      `activity timeout: expected compile:sentence events in rocq sync diagnostics, ` +
+      `got: ${stages}`
+    );
+  }
+}
+
+// Asserts that the loading overlay showed per-sentence compilation progress
+// while the SLOW_COMPILE_BRIDGE_SOURCE was compiling theory.  The
+// readyWhen predicate fires as soon as the detail text shows "Compiling
+// game-core theory", so interactions.readySnapshot captures the live state.
+function assertRocqSyncCompileProgressOverlayScenario(snapshot, consoleEvents, interactions) {
+  const failure = detectFailure(snapshot, consoleEvents);
+  if (failure && !failure.startsWith('status-bar-error') && !failure.startsWith('render-startup-failed')) {
+    throw new Error(failure);
+  }
+
+  const progressSnapshot = interactions.readySnapshot;
+  if (!progressSnapshot?.placeholder) {
+    throw new Error('compile progress overlay: readySnapshot is missing the placeholder element');
+  }
+  if (progressSnapshot.placeholder.hidden) {
+    throw new Error(
+      'compile progress overlay: placeholder was hidden when progress text was expected — ' +
+      'compile:sentence events may not be reaching the overlay'
+    );
+  }
+  // Detail must start with the canonical progress prefix.
+  const detail = progressSnapshot.placeholder.detail ?? '';
+  if (!detail.startsWith('Compiling game-core theory')) {
+    throw new Error(
+      `compile progress overlay: expected detail to start with ` +
+      `"Compiling game-core theory", got: "${detail || '(empty)'}"`
+    );
+  }
+  // Detail must end with "sentence done" or "sentences done".
+  if (!detail.includes('sentence') || !detail.includes('done')) {
+    throw new Error(
+      `compile progress overlay: detail missing "sentence … done" progress text, got: "${detail}"`
+    );
+  }
+  // Title must remain "Syncing Rocq render state\u2026" — we only update the detail.
+  if (progressSnapshot.placeholder.title !== 'Syncing Rocq render state\u2026') {
+    throw new Error(
+      `compile progress overlay: title changed unexpectedly during compile progress, ` +
+      `got: "${progressSnapshot.placeholder.title ?? '(empty)'}"`
+    );
+  }
+}
+
 async function dragResizeHandle(page, { deltaX = 0, deltaY = 0 }) {
   const handle = page.locator('#resize-handle');
   const box = await handle.boundingBox();
@@ -2066,6 +2238,39 @@ async function main() {
           },
           assert(snapshot, consoleEvents, interactions) {
             assertRocqSyncTimeoutScenario(snapshot, consoleEvents, interactions);
+          },
+        },
+        {
+          // Regression for the activity-based timeout: SLOW_COMPILE_BRIDGE_SOURCE
+          // emits 6 compile:sentence events at 100 ms intervals (600 ms total).
+          // With rocq_sync_timeout_ms=500 a flat withTimeout would fire at 500 ms
+          // and produce a timeout error; withActivityTimeout resets on each event
+          // and lets load_world complete.  If this scenario fails with a timeout
+          // overlay, withActivityTimeout is broken.
+          name: 'browser-rocq-sync-activity-timeout',
+          rootScenario: 'slow-compile-overlay',
+          query: 'rocq_sync_timeout_ms=500',
+          readyWhen(current) {
+            return current.placeholder?.hidden === true;
+          },
+          assert(snapshot, consoleEvents) {
+            assertRocqSyncActivityTimeoutScenario(snapshot, consoleEvents);
+          },
+        },
+        {
+          // Verifies that the loading overlay detail text updates to show
+          // per-sentence compilation progress while theory is compiling.
+          // readyWhen fires as soon as the detail shows the progress prefix,
+          // giving interactions.readySnapshot the live overlay state.
+          name: 'browser-rocq-sync-compile-progress-overlay',
+          rootScenario: 'slow-compile-overlay',
+          readyWhen(current) {
+            return !current.placeholder?.hidden
+              && typeof current.placeholder?.detail === 'string'
+              && current.placeholder.detail.startsWith('Compiling game-core theory');
+          },
+          assert(snapshot, consoleEvents, interactions) {
+            assertRocqSyncCompileProgressOverlayScenario(snapshot, consoleEvents, interactions);
           },
         }
       );

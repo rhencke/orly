@@ -95,7 +95,7 @@ jobs:
         run: npm run --silent playwright:install
 
       - name: Smoke local browser demo
-        run: npm run --silent test:q3dm1-browser
+        run: npm run --silent test:browser
 
   deploy:
     if: github.event_name != 'pull_request'

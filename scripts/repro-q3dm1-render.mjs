@@ -408,6 +408,14 @@ async function gatherSnapshot(page) {
     const queryPanel = document.getElementById('query-panel');
     const packagesPanel = document.getElementById('packages-panel');
     const helpPanel = document.getElementById('help-panel');
+    const lowerPanelShell = document.getElementById('lower-panel-shell');
+    const lowerPanelHeader = document.getElementById('lower-panel-header');
+    const lowerPanelLabel = document.getElementById('lower-panel-label');
+    const lowerPanelTitle = document.getElementById('lower-panel-title');
+    const lowerPanelCopy = document.getElementById('lower-panel-copy');
+    const lowerPanelFocus = document.getElementById('lower-panel-focus');
+    const lowerPanelFocusLabel = document.getElementById('lower-panel-focus-label');
+    const lowerPanelSectionButtons = Array.from(document.querySelectorAll('.lower-panel-section-button'));
     const resizeHandle = document.getElementById('resize-handle');
     const touchControls = document.getElementById('touch-controls');
     const movePad = document.querySelector('[data-touch-control="move-pad"]');
@@ -466,9 +474,12 @@ async function gatherSnapshot(page) {
     function flexPanelState(element) {
       if (!element) return null;
       const panel = element.closest('.flex-panel') ?? element;
+      const caption = panel.querySelector('.caption');
       return {
         rect: rectOf(element),
         panelRect: rectOf(panel),
+        captionRect: rectOf(caption),
+        captionText: caption?.textContent?.trim() ?? '',
         className: panel.className,
         collapsed: panel.classList.contains('collapsed'),
       };
@@ -561,6 +572,7 @@ async function gatherSnapshot(page) {
               ? {
                   rect: rectOf(toolbar),
                   buttonCount: toolbar.querySelectorAll('#buttons button').length,
+                  buttons: Array.from(toolbar.querySelectorAll('#buttons button')).map(rectOf),
                 }
               : null,
             goalPanel: flexPanelState(goalPanel),
@@ -569,9 +581,67 @@ async function gatherSnapshot(page) {
             helpPanel: flexPanelState(helpPanel),
           }
         : null,
+      lowerPanel: {
+        shell: lowerPanelShell
+          ? {
+              ...visibilityOf(lowerPanelShell),
+              rect: rectOf(lowerPanelShell),
+            }
+          : null,
+        header: rectOf(lowerPanelHeader),
+        label: lowerPanelLabel
+          ? {
+              ...visibilityOf(lowerPanelLabel),
+              text: lowerPanelLabel.textContent?.trim() ?? '',
+            }
+          : null,
+        title: lowerPanelTitle
+          ? {
+              ...visibilityOf(lowerPanelTitle),
+              rect: rectOf(lowerPanelTitle),
+              text: lowerPanelTitle.textContent?.trim() ?? '',
+            }
+          : null,
+        copy: lowerPanelCopy
+          ? {
+              ...visibilityOf(lowerPanelCopy),
+              text: lowerPanelCopy.textContent?.trim() ?? '',
+            }
+          : null,
+        focus: lowerPanelFocus
+          ? {
+              ...visibilityOf(lowerPanelFocus),
+              rect: rectOf(lowerPanelFocus),
+            }
+          : null,
+        focusLabel: lowerPanelFocusLabel
+          ? {
+              ...visibilityOf(lowerPanelFocusLabel),
+              text: lowerPanelFocusLabel.textContent?.trim() ?? '',
+            }
+          : null,
+        activeSection:
+          lowerPanelSectionButtons.find(button => button.classList.contains('is-active'))?.dataset.lowerPanelSection
+          ?? lowerPanelSectionButtons.find(button => button.getAttribute('aria-pressed') === 'true')?.dataset.lowerPanelSection
+          ?? null,
+        buttons: lowerPanelSectionButtons.map(button => ({
+          ...visibilityOf(button),
+          rect: rectOf(button),
+          section: button.dataset.lowerPanelSection ?? '',
+          text: button.textContent?.trim() ?? '',
+          disabled: button.disabled,
+          ariaPressed: button.getAttribute('aria-pressed'),
+          className: button.className,
+        })),
+      },
       resizeHandle: resizeHandle
         ? {
             rect: rectOf(resizeHandle),
+            orientation: resizeHandle.getAttribute('aria-orientation'),
+            valueMin: resizeHandle.getAttribute('aria-valuemin'),
+            valueMax: resizeHandle.getAttribute('aria-valuemax'),
+            valueNow: resizeHandle.getAttribute('aria-valuenow'),
+            valueText: resizeHandle.getAttribute('aria-valuetext'),
           }
         : null,
       hints: {
@@ -858,6 +928,153 @@ function assertDesktopRenderStartupScenario(snapshot, consoleEvents) {
   }
 }
 
+const LOWER_PANEL_SECTIONS = ['goals', 'messages', 'packages', 'help'];
+
+function getLowerPanelButton(snapshot, section) {
+  return snapshot?.lowerPanel?.buttons?.find(button => button.section === section) ?? null;
+}
+
+function assertLowerPanelChrome(snapshot, pointerMode) {
+  const lowerPanel = snapshot?.lowerPanel;
+  if (!lowerPanel?.shell?.visible) {
+    throw new Error('lower-panel shell should be visible');
+  }
+  if (!lowerPanel?.title?.visible) {
+    throw new Error('lower-panel title should be visible');
+  }
+  if (!lowerPanel?.focus?.visible) {
+    throw new Error('lower-panel focus controls should be visible');
+  }
+
+  const sections = lowerPanel.buttons?.map(button => button.section) ?? [];
+  if (JSON.stringify(sections) !== JSON.stringify(LOWER_PANEL_SECTIONS)) {
+    throw new Error(`unexpected lower-panel button set: [${sections.join(', ')}]`);
+  }
+
+  lowerPanel.buttons.forEach(button => {
+    if (!button.visible) {
+      throw new Error(`lower-panel ${button.section} button should be visible`);
+    }
+    if (button.disabled) {
+      throw new Error(`lower-panel ${button.section} button should be enabled`);
+    }
+  });
+
+  if (pointerMode === 'mobile') {
+    if (lowerPanel.label?.visible) {
+      throw new Error('mobile lower-panel label should stay hidden');
+    }
+    if (lowerPanel.focusLabel?.visible) {
+      throw new Error('mobile lower-panel focus label should stay hidden');
+    }
+    if (lowerPanel.copy?.visible) {
+      throw new Error('mobile lower-panel copy should stay hidden');
+    }
+    lowerPanel.buttons.forEach(button => {
+      assertNearTouchTarget(`mobile lower-panel ${button.section} button`, button.rect);
+    });
+  } else if (pointerMode === 'desktop') {
+    if (!lowerPanel.label?.visible) {
+      throw new Error('desktop lower-panel label should stay visible');
+    }
+    if (!lowerPanel.copy?.visible) {
+      throw new Error('desktop lower-panel copy should stay visible');
+    }
+  }
+}
+
+function assertLowerPanelActiveSection(snapshot, expectedSection) {
+  assertLowerPanelChrome(snapshot, snapshot?.pointer?.coarse ? 'mobile' : 'desktop');
+
+  if (snapshot.lowerPanel?.activeSection !== expectedSection) {
+    throw new Error(
+      `expected active lower-panel section ${expectedSection}, got ${snapshot.lowerPanel?.activeSection ?? '(missing)'}`
+    );
+  }
+
+  LOWER_PANEL_SECTIONS.forEach(section => {
+    const button = getLowerPanelButton(snapshot, section);
+    if (!button) {
+      throw new Error(`lower-panel ${section} button diagnostics missing`);
+    }
+    const expectedPressed = section === expectedSection ? 'true' : 'false';
+    if (button.ariaPressed !== expectedPressed) {
+      throw new Error(
+        `expected lower-panel ${section} button aria-pressed=${expectedPressed}, got ${button.ariaPressed ?? '(missing)'}`
+      );
+    }
+  });
+}
+
+function assertLowerPanelPanelsForSection(snapshot, expectedSection) {
+  const panelHasOpenBody = panel => {
+    const contentHeight = panel?.rect?.height ?? 0;
+    const panelHeight = panel?.panelRect?.height ?? 0;
+    const captionHeight = panel?.captionRect?.height ?? 0;
+    return contentHeight > 2 || panelHeight > captionHeight + 8;
+  };
+
+  if (expectedSection === 'goals' && !panelHasOpenBody(snapshot?.jscoqPanel?.goalPanel)) {
+    throw new Error('goals focus should keep the goal panel visibly open');
+  }
+
+  if (expectedSection === 'help' && !panelHasOpenBody(snapshot?.jscoqPanel?.helpPanel)) {
+    throw new Error('help focus should open the help panel');
+  }
+
+  if (expectedSection !== 'help' && panelHasOpenBody(snapshot?.jscoqPanel?.helpPanel)) {
+    throw new Error('help panel should close when another lower-panel section is focused');
+  }
+}
+
+function assertLowerPanelSectionSwitcherInteraction(interactions) {
+  if (!interactions) {
+    throw new Error('lower-panel section-switcher interactions missing');
+  }
+
+  LOWER_PANEL_SECTIONS.forEach(section => {
+    const snapshot = interactions[section];
+    if (!snapshot) {
+      throw new Error(`lower-panel ${section} interaction snapshot missing`);
+    }
+    assertLowerPanelActiveSection(snapshot, section);
+    assertLowerPanelPanelsForSection(snapshot, section);
+  });
+}
+
+function assertKeyboardResizeInteraction(interaction) {
+  if (!interaction) {
+    throw new Error('keyboard resize interaction missing');
+  }
+
+  const beforeWidth = interaction.before?.jscoqPanel?.rect?.width;
+  const afterGrowWidth = interaction.afterGrow?.jscoqPanel?.rect?.width;
+  const afterRestoreWidth = interaction.afterRestore?.jscoqPanel?.rect?.width;
+  if (!Number.isFinite(beforeWidth) || !Number.isFinite(afterGrowWidth) || !Number.isFinite(afterRestoreWidth)) {
+    throw new Error('keyboard resize interaction missing panel widths');
+  }
+
+  if (interaction.before?.resizeHandle?.orientation !== 'vertical') {
+    throw new Error(
+      `desktop resize handle should be vertical, got ${interaction.before?.resizeHandle?.orientation ?? '(missing)'}`
+    );
+  }
+
+  if (afterGrowWidth <= beforeWidth + 10) {
+    throw new Error('keyboard resize did not grow the desktop lower panel');
+  }
+
+  if (afterRestoreWidth >= afterGrowWidth - 10) {
+    throw new Error('keyboard resize did not restore the desktop lower panel');
+  }
+
+  const beforeValue = Number.parseFloat(interaction.before?.resizeHandle?.valueNow ?? 'NaN');
+  const afterGrowValue = Number.parseFloat(interaction.afterGrow?.resizeHandle?.valueNow ?? 'NaN');
+  if (!Number.isFinite(beforeValue) || !Number.isFinite(afterGrowValue) || afterGrowValue <= beforeValue) {
+    throw new Error('keyboard resize handle aria-valuenow did not increase');
+  }
+}
+
 function assertRealBridgeParseHandoffScenario(snapshot, consoleEvents) {
   const failure = detectFailure(snapshot, consoleEvents);
   if (failure) {
@@ -996,6 +1213,16 @@ function assertTouchTarget(name, rect) {
   }
 }
 
+function assertNearTouchTarget(name, rect, tolerance = 1) {
+  if (!rect) {
+    throw new Error(`${name} rect missing`);
+  }
+  const minimum = MIN_TOUCH_TARGET_PX - tolerance;
+  if (rect.width < minimum || rect.height < minimum) {
+    throw new Error(`${name} target smaller than ${minimum}px`);
+  }
+}
+
 function assertCollapsedFlexPanel(name, panel) {
   if (!panel) {
     throw new Error(`${name} diagnostics missing`);
@@ -1021,6 +1248,9 @@ function assertMobileLowerPanelUsability(snapshot, orientation) {
   if (!panelRect || !layout || !editorRect || !panelWrapperRect || !toolbarRect || !goalPanel?.rect) {
     throw new Error('mobile lower-panel diagnostics missing');
   }
+
+  assertLowerPanelChrome(snapshot, 'mobile');
+  assertLowerPanelActiveSection(snapshot, 'goals');
 
   if (layout.display !== 'flex' || layout.flexDirection !== 'column') {
     throw new Error(
@@ -1060,6 +1290,10 @@ function assertMobileLowerPanelUsability(snapshot, orientation) {
   if (goalPanel.rect.height < 44) {
     throw new Error('mobile lower-panel goal area became too small to read');
   }
+
+  assertNearTouchTarget('mobile goal caption', jscoqPanel.goalPanel?.captionRect);
+  assertNearTouchTarget('mobile messages caption', jscoqPanel.queryPanel?.captionRect);
+  assertNearTouchTarget('mobile packages caption', jscoqPanel.packagesPanel?.captionRect);
 
   assertCollapsedFlexPanel('mobile message panel', jscoqPanel.queryPanel);
   assertCollapsedFlexPanel('mobile packages panel', jscoqPanel.packagesPanel);
@@ -1330,6 +1564,55 @@ async function exerciseResizeHandle(page, orientation) {
   return { before, after };
 }
 
+async function clickLowerPanelSection(page, section) {
+  const button = page.locator(`.lower-panel-section-button[data-lower-panel-section="${section}"]`);
+  await button.waitFor({ state: 'visible' });
+  await button.click();
+  await page.waitForFunction(expectedSection => {
+    const activeButton = document.querySelector('.lower-panel-section-button.is-active');
+    const sectionFromPanel = panelId => {
+      if (panelId === 'goal-panel') return 'goals';
+      if (panelId === 'query-panel') return 'messages';
+      if (panelId === 'packages-panel') return 'packages';
+      if (panelId === 'help-panel') return 'help';
+      return null;
+    };
+
+    if (activeButton?.dataset.lowerPanelSection !== expectedSection) {
+      return false;
+    }
+
+    return Array.from(document.querySelectorAll('#panel-wrapper .flex-panel')).every(panel => {
+      const section = sectionFromPanel(panel.id);
+      if (!section) return true;
+      return panel.classList.contains('collapsed') === (section !== expectedSection);
+    });
+  }, section, { timeout: 10000 });
+  await page.waitForTimeout(100);
+  return gatherSnapshotWithRetry(page);
+}
+
+async function exerciseLowerPanelSectionSwitcher(page) {
+  const snapshots = {};
+  for (const section of ['goals', 'messages', 'packages', 'help', 'goals']) {
+    snapshots[section] = await clickLowerPanelSection(page, section);
+  }
+  return snapshots;
+}
+
+async function exerciseKeyboardResize(page) {
+  const handle = page.locator('#resize-handle');
+  await handle.focus();
+  const before = await gatherSnapshotWithRetry(page);
+  await page.keyboard.press('ArrowLeft');
+  await page.waitForTimeout(100);
+  const afterGrow = await gatherSnapshotWithRetry(page);
+  await page.keyboard.press('ArrowRight');
+  await page.waitForTimeout(100);
+  const afterRestore = await gatherSnapshotWithRetry(page);
+  return { before, afterGrow, afterRestore };
+}
+
 async function copyCurrentErrorOverlay(page) {
   const copyButton = page.locator('#copy-error-report');
   await copyButton.waitFor({ state: 'visible' });
@@ -1553,8 +1836,18 @@ async function main() {
           contextOptions: {
             viewport: { width: 1280, height: 720 },
           },
-          assert(snapshot, consoleEvents) {
-            assertDesktopRenderStartupScenario(snapshot, consoleEvents);
+          async afterReady(page) {
+            return {
+              sectionSwitcher: await exerciseLowerPanelSectionSwitcher(page),
+              keyboardResize: await exerciseKeyboardResize(page),
+            };
+          },
+          assert(snapshot, consoleEvents, interactions) {
+            assertDesktopRenderStartupScenario(interactions.readySnapshot, consoleEvents);
+            assertLowerPanelChrome(interactions.readySnapshot, 'desktop');
+            assertLowerPanelActiveSection(interactions.readySnapshot, 'goals');
+            assertLowerPanelSectionSwitcherInteraction(interactions.sectionSwitcher);
+            assertKeyboardResizeInteraction(interactions.keyboardResize);
           },
         },
         {
@@ -1578,11 +1871,13 @@ async function main() {
           contextOptions: IPHONE_13,
           async afterReady(page) {
             return {
+              sectionSwitcher: await exerciseLowerPanelSectionSwitcher(page),
               resize: await exerciseResizeHandle(page, 'portrait'),
             };
           },
           assert(snapshot, consoleEvents, interactions) {
             assertMobileRenderStartupScenario(interactions.readySnapshot, consoleEvents, 'portrait');
+            assertLowerPanelSectionSwitcherInteraction(interactions.sectionSwitcher);
           },
         },
         {

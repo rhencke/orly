@@ -7,7 +7,7 @@
 //
 // Usage:
 //   import { parseBsp } from './bsp.js';
-//   const bsp = parseBsp(arrayBuffer);  // throws on invalid input
+//   const bsp = parseBsp(arrayBuffer, { onDiagnostic });  // throws on invalid input
 
 // ── constants ────────────────────────────────────────────────────────
 const BSP_MAGIC   = 0x49425350;  // "IBSP" as stored in the file header
@@ -47,6 +47,61 @@ const LIGHTMAP_SIZE   = 49152;  // 128 * 128 * 3
 const MODEL_SIZE      = 40;
 
 // ── lump directory ───────────────────────────────────────────────────
+
+function nowMs() {
+  if (typeof globalThis.performance?.now === 'function') {
+    return globalThis.performance.now();
+  }
+  return Date.now();
+}
+
+function roundDurationMs(durationMs) {
+  return Number.isFinite(durationMs)
+    ? Math.round(durationMs * 1000) / 1000
+    : 0;
+}
+
+function emitParseDiagnostic(onDiagnostic, stage, payload = null) {
+  if (typeof onDiagnostic !== 'function') return;
+  const normalizedPayload =
+    typeof payload === 'object' && payload !== null
+      ? JSON.parse(JSON.stringify(payload))
+      : payload ?? null;
+  onDiagnostic({
+    stage,
+    at: new Date().toISOString(),
+    payload: normalizedPayload,
+  });
+}
+
+function timeParseStep(onDiagnostic, stage, payload, reader, summarizeResult = () => null) {
+  const startedAtMs = nowMs();
+  emitParseDiagnostic(onDiagnostic, `${stage}:start`, payload);
+  try {
+    const result = reader();
+    emitParseDiagnostic(onDiagnostic, `${stage}:complete`, {
+      ...(payload ?? {}),
+      durationMs: roundDurationMs(nowMs() - startedAtMs),
+      ...(summarizeResult(result) ?? {}),
+    });
+    return result;
+  } catch (error) {
+    emitParseDiagnostic(onDiagnostic, `${stage}:failed`, {
+      ...(payload ?? {}),
+      durationMs: roundDurationMs(nowMs() - startedAtMs),
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
+}
+
+function summarizeLump(entry, entrySize = 0) {
+  return {
+    offset: Number.isInteger(entry?.offset) ? entry.offset : 0,
+    byteLength: Number.isInteger(entry?.length) ? entry.length : 0,
+    count: entrySize > 0 ? lumpCount(entry, entrySize) : 0,
+  };
+}
 
 function readLumpDirectory(view) {
   const dir = new Array(NUM_LUMPS);
@@ -410,49 +465,264 @@ export function isVisibleTexture(tex) {
  * (theories/BspFile.v).  Throws on invalid magic or version.
  *
  * @param {ArrayBuffer} buffer
+ * @param {{ onDiagnostic?: Function }} options
  * @returns {object} Parsed BSP data
  */
-export function parseBsp(buffer) {
+export function parseBsp(buffer, options = {}) {
+  const onDiagnostic =
+    typeof options?.onDiagnostic === 'function' ? options.onDiagnostic : null;
+  const parseStartedAtMs = nowMs();
+  emitParseDiagnostic(onDiagnostic, 'parse:start', {
+    byteLength: buffer?.byteLength ?? 0,
+  });
+
   if (buffer.byteLength < 8 + NUM_LUMPS * 8) {
     throw new Error(`BSP too short: ${buffer.byteLength} bytes (need at least ${8 + NUM_LUMPS * 8})`);
   }
 
-  const view = new DataView(buffer);
+  try {
+    const view = new DataView(buffer);
 
-  // Validate header — matches BspFormat.v parse_bsp_header
-  const magic   = view.getUint32(0, false);
-  const version = view.getInt32(4, true);
-  if (magic !== BSP_MAGIC) {
-    throw new Error(`Bad BSP magic: 0x${magic.toString(16)} (expected 0x${BSP_MAGIC.toString(16)})`);
+    const { magic, version } = timeParseStep(
+      onDiagnostic,
+      'header',
+      { byteLength: 8 + NUM_LUMPS * 8 },
+      () => {
+        // Validate header — matches BspFormat.v parse_bsp_header
+        const magic = view.getUint32(0, false);
+        const version = view.getInt32(4, true);
+        if (magic !== BSP_MAGIC) {
+          throw new Error(`Bad BSP magic: 0x${magic.toString(16)} (expected 0x${BSP_MAGIC.toString(16)})`);
+        }
+        if (version !== BSP_VERSION) {
+          throw new Error(`Bad BSP version: ${version} (expected ${BSP_VERSION})`);
+        }
+        return { magic, version };
+      },
+      ({ magic, version }) => ({
+        magic: `0x${magic.toString(16)}`,
+        version,
+      })
+    );
+
+    const dir = timeParseStep(
+      onDiagnostic,
+      'directory',
+      { entryCount: NUM_LUMPS },
+      () => readLumpDirectory(view),
+      directory => ({
+        totalByteLength: directory.reduce((total, entry) => total + Math.max(0, entry?.length ?? 0), 0),
+      })
+    );
+
+    const entityString = timeParseStep(
+      onDiagnostic,
+      'lump:entities:text',
+      summarizeLump(dir[LUMP_ENTITIES]),
+      () => readEntities(view, dir[LUMP_ENTITIES]),
+      value => ({
+        charCount: typeof value === 'string' ? value.length : 0,
+      })
+    );
+
+    const entities = timeParseStep(
+      onDiagnostic,
+      'lump:entities:parse',
+      {
+        charCount: typeof entityString === 'string' ? entityString.length : 0,
+      },
+      () => parseEntities(entityString),
+      value => ({
+        count: Array.isArray(value) ? value.length : 0,
+      })
+    );
+
+    const textures = timeParseStep(
+      onDiagnostic,
+      'lump:textures',
+      summarizeLump(dir[LUMP_TEXTURES], TEXTURE_SIZE),
+      () => readTextures(view, dir[LUMP_TEXTURES]),
+      value => ({
+        count: Array.isArray(value) ? value.length : 0,
+      })
+    );
+    const planes = timeParseStep(
+      onDiagnostic,
+      'lump:planes',
+      summarizeLump(dir[LUMP_PLANES], PLANE_SIZE),
+      () => readPlanes(view, dir[LUMP_PLANES]),
+      value => ({
+        count: Array.isArray(value) ? value.length : 0,
+      })
+    );
+    const nodes = timeParseStep(
+      onDiagnostic,
+      'lump:nodes',
+      summarizeLump(dir[LUMP_NODES], NODE_SIZE),
+      () => readNodes(view, dir[LUMP_NODES]),
+      value => ({
+        count: Array.isArray(value) ? value.length : 0,
+      })
+    );
+    const leaves = timeParseStep(
+      onDiagnostic,
+      'lump:leaves',
+      summarizeLump(dir[LUMP_LEAVES], LEAF_SIZE),
+      () => readLeaves(view, dir[LUMP_LEAVES]),
+      value => ({
+        count: Array.isArray(value) ? value.length : 0,
+      })
+    );
+    const leafFaces = timeParseStep(
+      onDiagnostic,
+      'lump:leaf-faces',
+      summarizeLump(dir[LUMP_LEAF_FACES], 4),
+      () => readI32Lump(view, dir[LUMP_LEAF_FACES]),
+      value => ({
+        count: value?.length ?? 0,
+      })
+    );
+    const leafBrushes = timeParseStep(
+      onDiagnostic,
+      'lump:leaf-brushes',
+      summarizeLump(dir[LUMP_LEAF_BRUSHES], 4),
+      () => readI32Lump(view, dir[LUMP_LEAF_BRUSHES]),
+      value => ({
+        count: value?.length ?? 0,
+      })
+    );
+    const models = timeParseStep(
+      onDiagnostic,
+      'lump:models',
+      summarizeLump(dir[LUMP_MODELS], MODEL_SIZE),
+      () => readModels(view, dir[LUMP_MODELS]),
+      value => ({
+        count: Array.isArray(value) ? value.length : 0,
+      })
+    );
+    const brushes = timeParseStep(
+      onDiagnostic,
+      'lump:brushes',
+      summarizeLump(dir[LUMP_BRUSHES], BRUSH_SIZE),
+      () => readBrushes(view, dir[LUMP_BRUSHES]),
+      value => ({
+        count: Array.isArray(value) ? value.length : 0,
+      })
+    );
+    const brushSides = timeParseStep(
+      onDiagnostic,
+      'lump:brush-sides',
+      summarizeLump(dir[LUMP_BRUSH_SIDES], BRUSH_SIDE_SIZE),
+      () => readBrushSides(view, dir[LUMP_BRUSH_SIDES]),
+      value => ({
+        count: Array.isArray(value) ? value.length : 0,
+      })
+    );
+    const vertices = timeParseStep(
+      onDiagnostic,
+      'lump:vertices',
+      summarizeLump(dir[LUMP_VERTEXES], VERTEX_SIZE),
+      () => readVertices(view, dir[LUMP_VERTEXES]),
+      value => ({
+        count: Array.isArray(value) ? value.length : 0,
+      })
+    );
+    const meshVerts = timeParseStep(
+      onDiagnostic,
+      'lump:mesh-verts',
+      summarizeLump(dir[LUMP_MESH_VERTS], 4),
+      () => readI32Lump(view, dir[LUMP_MESH_VERTS]),
+      value => ({
+        count: value?.length ?? 0,
+      })
+    );
+    const effects = timeParseStep(
+      onDiagnostic,
+      'lump:effects',
+      summarizeLump(dir[LUMP_EFFECTS], EFFECT_SIZE),
+      () => readEffects(view, dir[LUMP_EFFECTS]),
+      value => ({
+        count: Array.isArray(value) ? value.length : 0,
+      })
+    );
+    const faces = timeParseStep(
+      onDiagnostic,
+      'lump:faces',
+      summarizeLump(dir[LUMP_FACES], FACE_SIZE),
+      () => readFaces(view, dir[LUMP_FACES]),
+      value => ({
+        count: Array.isArray(value) ? value.length : 0,
+      })
+    );
+    const lightmaps = timeParseStep(
+      onDiagnostic,
+      'lump:lightmaps',
+      summarizeLump(dir[LUMP_LIGHTMAPS], LIGHTMAP_SIZE),
+      () => readLightmaps(view, dir[LUMP_LIGHTMAPS]),
+      value => ({
+        count: Array.isArray(value) ? value.length : 0,
+      })
+    );
+    const visData = timeParseStep(
+      onDiagnostic,
+      'lump:vis-data',
+      summarizeLump(dir[LUMP_VIS_DATA]),
+      () => readVisData(view, dir[LUMP_VIS_DATA]),
+      value => ({
+        clusterCount: Number.isInteger(value?.numClusters) ? value.numClusters : 0,
+        bytesPerCluster: Number.isInteger(value?.bytesPerCluster) ? value.bytesPerCluster : 0,
+      })
+    );
+
+    const bsp = {
+      magic,
+      version,
+      directory: dir,
+      entities,
+      entityString,
+      textures,
+      planes,
+      nodes,
+      leaves,
+      leafFaces,
+      leafBrushes,
+      models,
+      brushes,
+      brushSides,
+      vertices,
+      meshVerts,
+      effects,
+      faces,
+      lightmaps,
+      visData,
+    };
+
+    emitParseDiagnostic(onDiagnostic, 'parse:complete', {
+      byteLength: buffer.byteLength,
+      durationMs: roundDurationMs(nowMs() - parseStartedAtMs),
+      entityCount: bsp.entities.length,
+      textureCount: bsp.textures.length,
+      planeCount: bsp.planes.length,
+      nodeCount: bsp.nodes.length,
+      leafCount: bsp.leaves.length,
+      modelCount: bsp.models.length,
+      brushCount: bsp.brushes.length,
+      brushSideCount: bsp.brushSides.length,
+      vertexCount: bsp.vertices.length,
+      meshVertCount: bsp.meshVerts.length,
+      effectCount: bsp.effects.length,
+      faceCount: bsp.faces.length,
+      lightmapCount: bsp.lightmaps.length,
+      visClusterCount: Number.isInteger(bsp.visData?.numClusters) ? bsp.visData.numClusters : 0,
+    });
+
+    return bsp;
+  } catch (error) {
+    emitParseDiagnostic(onDiagnostic, 'parse:failed', {
+      byteLength: buffer.byteLength,
+      durationMs: roundDurationMs(nowMs() - parseStartedAtMs),
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
   }
-  if (version !== BSP_VERSION) {
-    throw new Error(`Bad BSP version: ${version} (expected ${BSP_VERSION})`);
-  }
-
-  const dir = readLumpDirectory(view);
-
-  const entityString = readEntities(view, dir[LUMP_ENTITIES]);
-
-  return {
-    magic,
-    version,
-    directory: dir,
-    entities:    parseEntities(entityString),
-    entityString,
-    textures:    readTextures(view, dir[LUMP_TEXTURES]),
-    planes:      readPlanes(view, dir[LUMP_PLANES]),
-    nodes:       readNodes(view, dir[LUMP_NODES]),
-    leaves:      readLeaves(view, dir[LUMP_LEAVES]),
-    leafFaces:   readI32Lump(view, dir[LUMP_LEAF_FACES]),
-    leafBrushes: readI32Lump(view, dir[LUMP_LEAF_BRUSHES]),
-    models:      readModels(view, dir[LUMP_MODELS]),
-    brushes:     readBrushes(view, dir[LUMP_BRUSHES]),
-    brushSides:  readBrushSides(view, dir[LUMP_BRUSH_SIDES]),
-    vertices:    readVertices(view, dir[LUMP_VERTEXES]),
-    meshVerts:   readI32Lump(view, dir[LUMP_MESH_VERTS]),
-    effects:     readEffects(view, dir[LUMP_EFFECTS]),
-    faces:       readFaces(view, dir[LUMP_FACES]),
-    lightmaps:   readLightmaps(view, dir[LUMP_LIGHTMAPS]),
-    visData:     readVisData(view, dir[LUMP_VIS_DATA]),
-  };
 }

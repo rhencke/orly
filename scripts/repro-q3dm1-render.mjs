@@ -231,13 +231,18 @@ async function createScenarioRoot(scenarioName) {
   await fs.cp(DOCS_DIR, rootDir, { recursive: true });
   await fs.rm(path.join(rootDir, 'assets'), { recursive: true, force: true });
 
-  if (scenarioName === 'licensed-map-render-startup' || scenarioName === 'rocq-sync-timeout-overlay') {
+  if (scenarioName === 'licensed-map-render-startup' ||
+      scenarioName === 'licensed-map-parse-handoff' ||
+      scenarioName === 'rocq-sync-timeout-overlay') {
     await fs.mkdir(path.join(rootDir, 'assets', 'maps'), { recursive: true });
     await fs.writeFile(
       path.join(rootDir, 'assets', 'manifest.json'),
       `${JSON.stringify([LICENSED_MAP_PATH])}\n`
     );
     await fs.copyFile(LICENSED_MAP_SOURCE, path.join(rootDir, 'assets', LICENSED_MAP_PATH));
+  }
+
+  if (scenarioName === 'licensed-map-render-startup' || scenarioName === 'rocq-sync-timeout-overlay') {
     await fs.writeFile(
       path.join(rootDir, 'rocq_bridge.js'),
       scenarioName === 'rocq-sync-timeout-overlay' ? HANGING_BRIDGE_SOURCE : STUB_BRIDGE_SOURCE
@@ -284,6 +289,10 @@ async function gatherSnapshot(page) {
     const rocqSyncDiagnostics =
       window.orlyRocqSyncDiagnostics && typeof window.orlyRocqSyncDiagnostics === 'object'
         ? structuredClone(window.orlyRocqSyncDiagnostics)
+        : null;
+    const bspParseDiagnostics =
+      window.orlyBspParseDiagnostics && typeof window.orlyBspParseDiagnostics === 'object'
+        ? structuredClone(window.orlyBspParseDiagnostics)
         : null;
 
     function rectOf(element) {
@@ -441,6 +450,7 @@ async function gatherSnapshot(page) {
       },
       buildInfo,
       errorReport,
+      bspParseDiagnostics,
       rocqSyncDiagnostics,
       assetCount: assetMap?.size ?? null,
       jscoqLoaded: Boolean(document.querySelector('.CodeMirror')),
@@ -549,6 +559,42 @@ function detectStalledRocqSync(snapshot) {
     `status="${statusText}", ` +
     `detail="${placeholder.detail || '(empty)'}"`
   );
+}
+
+function summarizeBspParseState(snapshot) {
+  const diagnostics = snapshot?.bspParseDiagnostics ?? null;
+  if (!diagnostics) return 'parseDiagnostics=(missing)';
+
+  const parts = [
+    `state="${diagnostics.state ?? '(missing)'}"`,
+    `map="${diagnostics.mapLabel ?? '(missing)'}"`,
+  ];
+  if (Number.isFinite(diagnostics.totalDurationMs)) {
+    parts.push(`durationMs=${Math.round(diagnostics.totalDurationMs)}`);
+  }
+  if (diagnostics.lastEvent?.stage) {
+    parts.push(`lastEvent="${diagnostics.lastEvent.stage}"`);
+  }
+  return parts.join(', ');
+}
+
+function detectStalledBspParse(snapshot) {
+  const statusText = snapshot?.status?.text ?? '';
+  const placeholder = snapshot?.placeholder ?? null;
+  const placeholderTitle = String(placeholder?.title ?? '').trim();
+  if (statusText !== 'Parsing BSP…') {
+    return null;
+  }
+  if (snapshot?.status?.hidden !== false) {
+    return null;
+  }
+  if (placeholder?.hidden !== false || placeholder.state !== 'loading') {
+    return null;
+  }
+  if (!placeholderTitle.startsWith('Parsing ') || !placeholderTitle.endsWith(' BSP…')) {
+    return null;
+  }
+  return `bsp-parse-stalled: ${summarizeBspParseState(snapshot)}`;
 }
 
 async function waitForScenario(page, consoleEvents, predicate, timeoutFailure = null, stopOnFailure = true) {
@@ -673,6 +719,63 @@ function assertDesktopRenderStartupScenario(snapshot, consoleEvents) {
   }
   if (!snapshot.hints?.desktop?.visible) {
     throw new Error('desktop hint should stay visible in desktop render scenario');
+  }
+}
+
+function assertRealBridgeParseHandoffScenario(snapshot, consoleEvents) {
+  const failure = detectFailure(snapshot, consoleEvents);
+  if (failure) {
+    throw new Error(failure);
+  }
+  if (!snapshot.jscoqLoaded) {
+    throw new Error('JsCoq editor did not load');
+  }
+  if (snapshot.assetCount !== 1) {
+    throw new Error(`expected one licensed map asset, got ${snapshot.assetCount}`);
+  }
+
+  const diagnostics = snapshot.bspParseDiagnostics;
+  if (!diagnostics) {
+    throw new Error('BSP parse diagnostics were not captured');
+  }
+  if (diagnostics.state !== 'ready') {
+    throw new Error(`expected BSP parse diagnostics to be ready, got ${diagnostics.state ?? '(missing)'}`);
+  }
+  if (!Number.isFinite(diagnostics.totalDurationMs) || diagnostics.totalDurationMs <= 0) {
+    throw new Error(`unexpected BSP parse duration: ${diagnostics.totalDurationMs ?? '(missing)'}`);
+  }
+  if ((diagnostics.summary?.faceCount ?? 0) <= 0) {
+    throw new Error(`unexpected BSP face count: ${diagnostics.summary?.faceCount ?? '(missing)'}`);
+  }
+  if ((diagnostics.summary?.lightmapCount ?? 0) <= 0) {
+    throw new Error(`unexpected BSP lightmap count: ${diagnostics.summary?.lightmapCount ?? '(missing)'}`);
+  }
+  if (diagnostics.lastEvent?.stage !== 'parse:complete') {
+    throw new Error(`unexpected BSP parse last event: ${diagnostics.lastEvent?.stage ?? '(missing)'}`);
+  }
+
+  if (snapshot.status?.hidden !== false) {
+    throw new Error('status bar hid before Rocq sync started');
+  }
+  if (snapshot.status?.text !== 'Syncing Rocq render state…') {
+    throw new Error(`expected Rocq sync status after BSP parse, got ${snapshot.status?.text ?? '(empty)'}`);
+  }
+  if (snapshot.status?.className !== 'loading') {
+    throw new Error(`expected loading status during Rocq handoff, got ${snapshot.status?.className ?? '(missing)'}`);
+  }
+
+  if (snapshot.placeholder?.hidden !== false || snapshot.placeholder?.state !== 'loading') {
+    throw new Error('placeholder should stay visible while Rocq sync is loading');
+  }
+  if (snapshot.placeholder?.title !== 'Syncing Rocq render state…') {
+    throw new Error(`unexpected placeholder title after parse handoff: ${snapshot.placeholder?.title ?? '(missing)'}`);
+  }
+  if (!snapshot.placeholder?.detail.includes('verified game core')) {
+    throw new Error(`unexpected placeholder detail after parse handoff: ${snapshot.placeholder?.detail ?? '(missing)'}`);
+  }
+
+  if (!hasEvent(consoleEvents, /orly: parsed BSP/i)) {
+    throw new Error('console never reported a parsed BSP before the Rocq handoff');
   }
 }
 
@@ -1284,6 +1387,21 @@ async function main() {
           },
         },
         {
+          name: 'licensed-map-parse-handoff-real-bridge',
+          rootScenario: 'licensed-map-parse-handoff',
+          contextOptions: {
+            viewport: { width: 1280, height: 720 },
+          },
+          readyWhen(current) {
+            return current.bspParseDiagnostics?.state === 'ready'
+              && current.status?.text === 'Syncing Rocq render state…'
+              && current.placeholder?.title === 'Syncing Rocq render state…';
+          },
+          assert(snapshot, consoleEvents, interactions) {
+            assertRealBridgeParseHandoffScenario(interactions.readySnapshot, consoleEvents);
+          },
+        },
+        {
           name: 'licensed-map-render-startup-mobile-portrait',
           rootScenario: 'licensed-map-render-startup',
           contextOptions: IPHONE_13,
@@ -1360,7 +1478,7 @@ async function main() {
           };
         },
         timeoutFailure(snapshot) {
-          return detectStalledRocqSync(snapshot);
+          return detectStalledBspParse(snapshot) ?? detectStalledRocqSync(snapshot);
         },
         assert(snapshot, consoleEvents, interactions) {
           assertDeployedPagesScenario(snapshot, consoleEvents, interactions);

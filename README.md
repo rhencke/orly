@@ -90,16 +90,18 @@ npm run playwright:install
 npm run test:q3dm1-browser
 ```
 
-The regression script runs four scenarios against the local browser build:
+The regression script runs five scenarios against the local browser build:
 
 1. the assetless page load path, to ensure the JsCoq worker bootstrap still
    succeeds without tripping over browser security restrictions
 2. a desktop startup path using a fetched/cached `maps/am_lavaarena.bsp`
    licensed-map asset, to ensure the Rocq-seeded render pipeline reaches its
    first frame and hides the placeholder
-3. an iPhone-sized portrait startup path, to ensure the mobile controls stay
+3. a real-bridge parse handoff path using the licensed BSP, to ensure the page
+   leaves the BSP parsing overlay and enters Rocq sync once decode completes
+4. an iPhone-sized portrait startup path, to ensure the mobile controls stay
    visible, large enough to use, and safely inside the viewport
-4. an iPhone-sized landscape startup path, to ensure the split layout, control
+5. an iPhone-sized landscape startup path, to ensure the split layout, control
    reachability, and touch resize handle remain usable after rotation
 
 It writes screenshots plus JSON diagnostics under your system temp directory.

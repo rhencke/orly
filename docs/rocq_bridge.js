@@ -369,6 +369,16 @@ export function createRocqBridge(manager, options = {}) {
   const onDiagnostic =
     typeof options.onDiagnostic === 'function' ? options.onDiagnostic : null;
 
+  // Emit rocq:alive as soon as the JsCoq manager becomes ready — before any
+  // load_world work starts.  A timeout that shows no rocq:alive event means
+  // the Rocq WASM worker never came up at all (case A in #74 where the
+  // message routing itself is suspect).
+  waitForManagerReady(manager).then(() => {
+    emitDiagnostic(onDiagnostic, 'rocq:alive', {});
+  }).catch(() => {
+    // waitForManagerReady resolves; catch is a safeguard only.
+  });
+
   function getBridgeHelpersSid() {
     bridgeHelpersSidPromise ||= ensureBridgeHelpersReady(manager);
     return bridgeHelpersSidPromise;

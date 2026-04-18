@@ -1614,6 +1614,9 @@ async function exerciseKeyboardResize(page) {
   await page.keyboard.press('ArrowLeft');
   await page.waitForTimeout(100);
   const afterGrow = await gatherSnapshotWithRetry(page);
+  // Re-focus the handle: JsCoq's ResizeObserver can steal focus when the
+  // panel resizes, so we restore it explicitly before the restore keypress.
+  await handle.focus();
   await page.keyboard.press('ArrowRight');
   await page.waitForTimeout(100);
   const afterRestore = await gatherSnapshotWithRetry(page);

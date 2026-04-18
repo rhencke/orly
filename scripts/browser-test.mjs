@@ -594,6 +594,7 @@ async function createScenarioRoot(scenarioName) {
 
   if (scenarioName === 'licensed-map-render-startup' ||
       scenarioName === 'licensed-map-parse-handoff' ||
+      scenarioName === 'full-theory-with-proofs-compiles' ||
       scenarioName === 'rocq-sync-timeout-overlay' ||
       scenarioName === 'slow-compile-overlay') {
     await fs.mkdir(path.join(rootDir, 'assets', 'maps'), { recursive: true });
@@ -1032,8 +1033,8 @@ function detectStalledBspParse(snapshot) {
   return `bsp-parse-stalled: ${summarizeBspParseState(snapshot)}`;
 }
 
-async function waitForScenario(page, consoleEvents, predicate, timeoutFailure = null, stopOnFailure = true) {
-  const deadline = Date.now() + TIMEOUT_MS;
+async function waitForScenario(page, consoleEvents, predicate, timeoutFailure = null, stopOnFailure = true, timeoutMs = TIMEOUT_MS) {
+  const deadline = Date.now() + timeoutMs;
   let snapshot = await gatherSnapshotWithRetry(page);
 
   while (Date.now() < deadline) {
@@ -1358,6 +1359,63 @@ function assertRealBridgeParseHandoffScenario(snapshot, consoleEvents) {
 
   if (!hasEvent(consoleEvents, /orly: parsed BSP/i)) {
     throw new Error('console never reported a parsed BSP before the Rocq handoff');
+  }
+}
+
+// Asserts that the full BspCore.v theory — proofs included — compiled
+// successfully under JsCoq and the game reached its ready state.
+// Key checks:
+//   • compile:sentence events were emitted, confirming JsCoq compiled the
+//     theory on the fly (not from a preloaded .vo cache).
+//   • The sentence count is high enough to prove proof lemmas were processed
+//     (BspBinary.v's first Lemma is sentence ~33; by sentence 100 we are
+//     well into proof territory across all three bundled theories).
+//   • load_world completed, meaning the bridge helpers were found and all
+//     Eval vm_compute queries returned valid results.
+//   • The game reached a fully-running state (placeholder hidden, canvas live).
+function assertFullTheoryWithProofsCompilesScenario(snapshot, consoleEvents) {
+  const failure = detectFailure(snapshot, consoleEvents);
+  if (failure) {
+    throw new Error(`full-theory compile: ${failure}`);
+  }
+  if (!snapshot.jscoqLoaded) {
+    throw new Error('full-theory compile: JsCoq editor did not load');
+  }
+  if (snapshot.placeholder?.hidden !== true) {
+    throw new Error('full-theory compile: loading overlay never hid — theory did not finish compiling');
+  }
+
+  const diagnostics = snapshot.rocqSyncDiagnostics;
+  if (!diagnostics) {
+    throw new Error('full-theory compile: Rocq sync diagnostics were not captured');
+  }
+  if (diagnostics.state !== 'ready') {
+    throw new Error(
+      `full-theory compile: expected rocq sync state 'ready', got '${diagnostics.state ?? '(missing)'}'`
+    );
+  }
+
+  const events = Array.isArray(diagnostics.events) ? diagnostics.events : [];
+
+  const sentenceEvents = events.filter(e => e.stage === 'compile:sentence');
+  if (sentenceEvents.length < 100) {
+    const stages = events.map(e => e.stage).join(', ') || '(none)';
+    throw new Error(
+      `full-theory compile: expected at least 100 compile:sentence events (proves proofs were compiled), ` +
+      `got ${sentenceEvents.length}; all stages: ${stages}`
+    );
+  }
+
+  if (!events.some(e => e.stage === 'load_world:complete')) {
+    const stages = events.map(e => e.stage).join(', ') || '(none)';
+    throw new Error(
+      `full-theory compile: load_world:complete never fired; got: ${stages}`
+    );
+  }
+
+  const canvas = snapshot.canvas;
+  if (!canvas || canvas.width <= 0 || canvas.height <= 0) {
+    throw new Error('full-theory compile: canvas did not reach a drawable size after theory loaded');
   }
 }
 
@@ -2054,7 +2112,8 @@ async function runScenario(browser, scenario, outDir, port) {
       consoleEvents,
       readyWhen,
       scenario.timeoutFailure ?? null,
-      scenario.stopOnFailure ?? true
+      scenario.stopOnFailure ?? true,
+      scenario.timeoutMs ?? TIMEOUT_MS
     );
 
     interactions = {
@@ -2255,6 +2314,26 @@ async function main() {
           },
           assert(snapshot, consoleEvents) {
             assertRocqSyncActivityTimeoutScenario(snapshot, consoleEvents);
+          },
+        },
+        {
+          // Verifies that BspCore.v — proofs included — compiles to
+          // completion in JsCoq and the game reaches its running state.
+          // Uses the real rocq_bridge.js (no stub) and the real BSP map so
+          // the full pipeline runs: JsCoq compiles the theory on the fly,
+          // the bridge queries run, and the render loop starts.
+          //
+          // Compilation of ~2290 lines with 97 proof lemmas is slow;
+          // timeoutMs is set to 3 minutes so headless CI has breathing room
+          // on constrained hardware.
+          name: 'full-theory-with-proofs-compiles',
+          rootScenario: 'full-theory-with-proofs-compiles',
+          contextOptions: {
+            viewport: { width: 1280, height: 720 },
+          },
+          timeoutMs: 180000,
+          assert(snapshot, consoleEvents) {
+            assertFullTheoryWithProofsCompilesScenario(snapshot, consoleEvents);
           },
         },
         {

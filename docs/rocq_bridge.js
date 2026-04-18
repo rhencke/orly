@@ -260,6 +260,13 @@ function summarizeSnapshot(snapshot) {
   };
 }
 
+function summarizeError(err) {
+  return {
+    message: err instanceof Error ? err.message : String(err),
+    stack: err instanceof Error ? (err.stack || '') : '',
+  };
+}
+
 function emitDiagnostic(emit, stage, payload = {}) {
   if (!emit) return;
   emit({
@@ -379,27 +386,48 @@ export function createRocqBridge(manager, options = {}) {
     },
 
     async load_world(world) {
-      emitDiagnostic(onDiagnostic, 'load_world:requested', summarizeWorld(world));
-      const sid = await getBridgeHelpersSid();
-      emitDiagnostic(onDiagnostic, 'load_world:helpers-ready', { sid });
-      const wordsPromise = evalInitialGameStateWords(manager, sid, world)
-        .then(words => {
-          emitDiagnostic(onDiagnostic, 'load_world:game-state-words', summarizeWordList(words));
-          return words;
+      try {
+        emitDiagnostic(onDiagnostic, 'load_world:requested', summarizeWorld(world));
+        const sid = await getBridgeHelpersSid();
+        emitDiagnostic(onDiagnostic, 'load_world:helpers-ready', { sid });
+        // Fires right before queryPromise calls — confirms Rocq worker is being
+        // invoked.  A timeout gap between helpers-ready and received means the
+        // manager handoff stalled; a gap after received means the WASM worker
+        // itself stalled (case B in #74).
+        emitDiagnostic(onDiagnostic, 'load_world:received', { sid });
+        const wordsPromise = evalInitialGameStateWords(manager, sid, world)
+          .then(words => {
+            emitDiagnostic(onDiagnostic, 'load_world:game-state-words', summarizeWordList(words));
+            return words;
+          });
+        const facesPromise = evalVisibleFaces(manager, sid, world)
+          .then(faces => {
+            emitDiagnostic(onDiagnostic, 'load_world:visible-faces', summarizeWordList(faces));
+            return faces;
+          });
+        const [words, faces] = await Promise.all([wordsPromise, facesPromise]);
+        // Both Rocq queries resolved and their outputs are parsed — all Rocq
+        // data is in hand.  A gap here (after visible-faces/game-state-words
+        // but before decoded) would indicate one query stalled.
+        emitDiagnostic(onDiagnostic, 'load_world:decoded', {
+          gsWordCount: words.length,
+          visibleFaceCount: faces.length,
         });
-      const facesPromise = evalVisibleFaces(manager, sid, world)
-        .then(faces => {
-          emitDiagnostic(onDiagnostic, 'load_world:visible-faces', summarizeWordList(faces));
-          return faces;
-        });
-      const [words, faces] = await Promise.all([wordsPromise, facesPromise]);
-      collisionWorldExpr = formatCollisionWorld(world);
-      gsWords        = words;
-      initialGsWords = [...words];
-      visibleFaces   = faces;
-      const snapshot = snapshotFromGameStateWords(gsWords, visibleFaces);
-      emitDiagnostic(onDiagnostic, 'load_world:complete', summarizeSnapshot(snapshot));
-      return snapshot;
+        collisionWorldExpr = formatCollisionWorld(world);
+        gsWords        = words;
+        initialGsWords = [...words];
+        visibleFaces   = faces;
+        const snapshot = snapshotFromGameStateWords(gsWords, visibleFaces);
+        // Snapshot object is fully constructed on the JS side.  A gap between
+        // snapshot_built and complete would indicate the return path stalled
+        // (case C in #74).
+        emitDiagnostic(onDiagnostic, 'load_world:snapshot_built', summarizeSnapshot(snapshot));
+        emitDiagnostic(onDiagnostic, 'load_world:complete', summarizeSnapshot(snapshot));
+        return snapshot;
+      } catch (err) {
+        emitDiagnostic(onDiagnostic, 'load_world:failed', summarizeError(err));
+        throw err;
+      }
     },
 
     async step(inputSnapshot) {

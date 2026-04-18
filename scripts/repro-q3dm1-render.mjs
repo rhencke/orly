@@ -45,8 +45,18 @@ const VIEW_MATRIX = [1, 0, 0, 0,
                      0, 0, 1, 0,
                      0, 0, 0, 1];
 
-export function createRocqBridge() {
+export function createRocqBridge(_manager, options = {}) {
   let visibleFaces = [];
+  const onDiagnostic =
+    typeof options?.onDiagnostic === 'function' ? options.onDiagnostic : null;
+
+  function emit(stage, payload = {}) {
+    onDiagnostic?.({
+      stage,
+      at: new Date().toISOString(),
+      payload,
+    });
+  }
 
   function snapshot() {
     return {
@@ -61,11 +71,20 @@ export function createRocqBridge() {
   return {
     version: 1,
 
+    async prepare() {},
+
     async load_world(world) {
       visibleFaces = Array.isArray(world?.faces)
         ? world.faces.map((_, fi) => fi)
         : [];
-      return snapshot();
+      emit('load_world:requested', {
+        faceCount: visibleFaces.length,
+      });
+      const nextSnapshot = snapshot();
+      emit('load_world:complete', {
+        visibleFaceCount: nextSnapshot.visibleFaces.length,
+      });
+      return nextSnapshot;
     },
 
     async step() {
@@ -74,6 +93,47 @@ export function createRocqBridge() {
 
     async reset() {
       return snapshot();
+    },
+  };
+}
+`;
+
+const HANGING_BRIDGE_SOURCE = `
+export function createRocqBridge(_manager, options = {}) {
+  const onDiagnostic =
+    typeof options?.onDiagnostic === 'function' ? options.onDiagnostic : null;
+
+  function emit(stage, payload = {}) {
+    onDiagnostic?.({
+      stage,
+      at: new Date().toISOString(),
+      payload,
+    });
+  }
+
+  return {
+    version: 1,
+
+    async prepare() {},
+
+    async load_world(world) {
+      emit('load_world:requested', {
+        entityCount: Array.isArray(world?.entities) ? world.entities.length : 0,
+        faceCount: Array.isArray(world?.faces) ? world.faces.length : 0,
+        textureCount: Array.isArray(world?.textures) ? world.textures.length : 0,
+      });
+      emit('load_world:waiting', {
+        reason: 'repro bridge intentionally never resolves load_world',
+      });
+      await new Promise(() => {});
+    },
+
+    async step() {
+      throw new Error('step should not run while load_world is hanging');
+    },
+
+    async reset() {
+      throw new Error('reset should not run while load_world is hanging');
     },
   };
 }
@@ -171,14 +231,17 @@ async function createScenarioRoot(scenarioName) {
   await fs.cp(DOCS_DIR, rootDir, { recursive: true });
   await fs.rm(path.join(rootDir, 'assets'), { recursive: true, force: true });
 
-  if (scenarioName === 'licensed-map-render-startup') {
+  if (scenarioName === 'licensed-map-render-startup' || scenarioName === 'rocq-sync-timeout-overlay') {
     await fs.mkdir(path.join(rootDir, 'assets', 'maps'), { recursive: true });
     await fs.writeFile(
       path.join(rootDir, 'assets', 'manifest.json'),
       `${JSON.stringify([LICENSED_MAP_PATH])}\n`
     );
     await fs.copyFile(LICENSED_MAP_SOURCE, path.join(rootDir, 'assets', LICENSED_MAP_PATH));
-    await fs.writeFile(path.join(rootDir, 'rocq_bridge.js'), STUB_BRIDGE_SOURCE);
+    await fs.writeFile(
+      path.join(rootDir, 'rocq_bridge.js'),
+      scenarioName === 'rocq-sync-timeout-overlay' ? HANGING_BRIDGE_SOURCE : STUB_BRIDGE_SOURCE
+    );
   }
 
   return rootDir;
@@ -210,6 +273,10 @@ async function gatherSnapshot(page) {
     const errorReport = window.orlyErrorReport && typeof window.orlyErrorReport === 'object'
       ? structuredClone(window.orlyErrorReport)
       : null;
+    const rocqSyncDiagnostics =
+      window.orlyRocqSyncDiagnostics && typeof window.orlyRocqSyncDiagnostics === 'object'
+        ? structuredClone(window.orlyRocqSyncDiagnostics)
+        : null;
 
     function rectOf(element) {
       if (!element) return null;
@@ -327,6 +394,7 @@ async function gatherSnapshot(page) {
       },
       buildInfo,
       errorReport,
+      rocqSyncDiagnostics,
       assetCount: assetMap?.size ?? null,
       jscoqLoaded: Boolean(document.querySelector('.CodeMirror')),
     };
@@ -414,18 +482,44 @@ function detectFailure(snapshot, consoleEvents) {
   return null;
 }
 
-async function waitForScenario(page, consoleEvents, predicate) {
+function detectStalledRocqSync(snapshot) {
+  const statusText = snapshot?.status?.text ?? '';
+  const placeholder = snapshot?.placeholder ?? null;
+  if (statusText !== 'Syncing Rocq render state…') {
+    return null;
+  }
+  if (snapshot?.status?.hidden !== false) {
+    return null;
+  }
+  if (placeholder?.hidden !== false || placeholder.state !== 'loading') {
+    return null;
+  }
+  if (placeholder.title !== 'Syncing Rocq render state…') {
+    return null;
+  }
+  return (
+    'rocq-sync-stalled: ' +
+    `status="${statusText}", ` +
+    `detail="${placeholder.detail || '(empty)'}"`
+  );
+}
+
+async function waitForScenario(page, consoleEvents, predicate, timeoutFailure = null, stopOnFailure = true) {
   const deadline = Date.now() + TIMEOUT_MS;
   let snapshot = await gatherSnapshotWithRetry(page);
 
   while (Date.now() < deadline) {
-    if (predicate(snapshot, consoleEvents) || detectFailure(snapshot, consoleEvents)) {
+    if (predicate(snapshot, consoleEvents) || (stopOnFailure && detectFailure(snapshot, consoleEvents))) {
       return snapshot;
     }
     await page.waitForTimeout(POLL_MS);
     snapshot = await gatherSnapshotWithRetry(page);
   }
 
+  const timeoutMessage = timeoutFailure?.(snapshot, consoleEvents);
+  if (timeoutMessage) {
+    throw new Error(timeoutMessage);
+  }
   return snapshot;
 }
 
@@ -711,6 +805,106 @@ function assertErrorOverlayCopyScenario(snapshot, consoleEvents, interactions) {
   assertClipboardPayload(copy.fallbackText, 'fallback payload');
 }
 
+function assertRocqSyncTimeoutScenario(snapshot, consoleEvents, interactions) {
+  const failure = detectFailure(snapshot, consoleEvents);
+  if (failure && !failure.startsWith('status-bar-error') && !failure.startsWith('render-startup-failed')) {
+    throw new Error(failure);
+  }
+
+  const copy = interactions.copyOverlay;
+  if (!copy) {
+    throw new Error('timeout overlay copy diagnostics missing');
+  }
+
+  const errorSnapshot = copy.snapshot ?? snapshot;
+  if (errorSnapshot.placeholder?.state !== 'error') {
+    throw new Error(`expected error placeholder state, got ${errorSnapshot.placeholder?.state ?? '(missing)'}`);
+  }
+  if (errorSnapshot.placeholder?.title !== 'Rocq render sync timed out') {
+    throw new Error(`unexpected timeout placeholder title: ${errorSnapshot.placeholder?.title ?? '(missing)'}`);
+  }
+  if (!errorSnapshot.placeholder?.detail.includes('Timed out after')) {
+    throw new Error(`timeout placeholder detail missing timeout text: ${errorSnapshot.placeholder?.detail ?? '(missing)'}`);
+  }
+  if (!errorSnapshot.placeholder?.detail.includes('Last bridge event: load_world:waiting')) {
+    throw new Error(`timeout placeholder detail missing last bridge event: ${errorSnapshot.placeholder?.detail ?? '(missing)'}`);
+  }
+  if (errorSnapshot.status?.className !== 'error') {
+    throw new Error(`expected error status class, got ${errorSnapshot.status?.className ?? '(missing)'}`);
+  }
+  if (!errorSnapshot.status?.text.includes('Rocq sync timeout: Timed out after')) {
+    throw new Error(`unexpected timeout status text: ${errorSnapshot.status?.text ?? '(missing)'}`);
+  }
+  if (!errorSnapshot.errorCopy?.button?.visible) {
+    throw new Error('copy button did not become visible for timeout overlay');
+  }
+  if (errorSnapshot.errorReport?.source !== 'rocq-sync-timeout') {
+    throw new Error(`unexpected timeout report source: ${errorSnapshot.errorReport?.source ?? '(missing)'}`);
+  }
+  if (errorSnapshot.errorReport?.diagnostics?.state !== 'timed-out') {
+    throw new Error(`unexpected timeout diagnostics state: ${errorSnapshot.errorReport?.diagnostics?.state ?? '(missing)'}`);
+  }
+  if (errorSnapshot.errorReport?.diagnostics?.lastEvent?.stage !== 'load_world:waiting') {
+    throw new Error(
+      `unexpected timeout last bridge event: ${errorSnapshot.errorReport?.diagnostics?.lastEvent?.stage ?? '(missing)'}`
+    );
+  }
+  if ((errorSnapshot.errorReport?.diagnostics?.request?.faceCount ?? 0) <= 0) {
+    throw new Error(
+      `unexpected timeout request face count: ${errorSnapshot.errorReport?.diagnostics?.request?.faceCount ?? '(missing)'}`
+    );
+  }
+  if (errorSnapshot.rocqSyncDiagnostics?.state !== 'timed-out') {
+    throw new Error(`unexpected live sync diagnostics state: ${errorSnapshot.rocqSyncDiagnostics?.state ?? '(missing)'}`);
+  }
+
+  if (copy.copiedLabel !== 'Copied!') {
+    throw new Error(`copy button did not show success label: ${copy.copiedLabel}`);
+  }
+  if (copy.resetLabel !== 'Copy') {
+    throw new Error(`copy button did not reset after feedback: ${copy.resetLabel}`);
+  }
+  if (errorSnapshot.errorCopy?.fallback?.selectionStart !== 0) {
+    throw new Error(
+      `fallback selection start should be 0, got ${errorSnapshot.errorCopy?.fallback?.selectionStart}`
+    );
+  }
+  if (errorSnapshot.errorCopy?.fallback?.selectionEnd !== copy.fallbackText.length) {
+    throw new Error(
+      `fallback selection end should cover full timeout payload, got ${errorSnapshot.errorCopy?.fallback?.selectionEnd}`
+    );
+  }
+
+  for (const [label, text] of [
+    ['timeout clipboard payload', copy.clipboardText],
+    ['timeout fallback payload', copy.fallbackText],
+  ]) {
+    if (!text.includes('Title: Rocq render sync timed out')) {
+      throw new Error(`${label} missing timeout title`);
+    }
+    if (!text.includes('Source: rocq-sync-timeout')) {
+      throw new Error(`${label} missing timeout source`);
+    }
+    if (!text.includes('Rocq sync diagnostics:')) {
+      throw new Error(`${label} missing sync diagnostics heading`);
+    }
+    if (!text.includes('State: timed-out')) {
+      throw new Error(`${label} missing timed-out diagnostics state`);
+    }
+    if (!text.includes('Last bridge event: load_world:waiting')) {
+      throw new Error(`${label} missing last bridge event`);
+    }
+    if (!text.includes('repro bridge intentionally never resolves load_world')) {
+      throw new Error(`${label} missing bridge payload reason`);
+    }
+    if (!text.includes('Request counts: entities=')
+        || !text.includes('faces=')
+        || !text.includes('textures=')) {
+      throw new Error(`${label} missing request count summary`);
+    }
+  }
+}
+
 async function dragResizeHandle(page, { deltaX = 0, deltaY = 0 }) {
   const handle = page.locator('#resize-handle');
   const box = await handle.boundingBox();
@@ -753,18 +947,7 @@ async function exerciseResizeHandle(page, orientation) {
   return { before, after };
 }
 
-async function exerciseErrorOverlayCopy(page) {
-  await page.evaluate(() => {
-    const error = new Error('Copy smoke error');
-    window.dispatchEvent(new ErrorEvent('error', {
-      message: error.message,
-      error,
-      filename: 'http://example.test/copy.js',
-      lineno: 9,
-      colno: 5,
-    }));
-  });
-
+async function copyCurrentErrorOverlay(page) {
   const copyButton = page.locator('#copy-error-report');
   await copyButton.waitFor({ state: 'visible' });
   await copyButton.click();
@@ -804,6 +987,21 @@ async function exerciseErrorOverlayCopy(page) {
   };
 }
 
+async function exerciseErrorOverlayCopy(page) {
+  await page.evaluate(() => {
+    const error = new Error('Copy smoke error');
+    window.dispatchEvent(new ErrorEvent('error', {
+      message: error.message,
+      error,
+      filename: 'http://example.test/copy.js',
+      lineno: 9,
+      colno: 5,
+    }));
+  });
+
+  return copyCurrentErrorOverlay(page);
+}
+
 function assertClipboardPayload(text, label = 'clipboard payload') {
   if (!text.startsWith('```text\n')) {
     throw new Error(`${label} should start with a fenced code block`);
@@ -834,7 +1032,10 @@ function assertClipboardPayload(text, label = 'clipboard payload') {
 async function runScenario(browser, scenario, outDir, port) {
   const scenarioRoot = scenario.url ? null : await createScenarioRoot(scenario.rootScenario ?? scenario.name);
   const serverInfo = scenario.url ? null : startStaticServer(scenarioRoot, port);
-  const url = scenario.url ?? `http://127.0.0.1:${port}/`;
+  const baseUrl = scenario.url ?? `http://127.0.0.1:${port}/`;
+  const url = scenario.query
+    ? `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}${scenario.query}`
+    : baseUrl;
   const consoleEvents = [];
   let context = null;
   let page = null;
@@ -865,7 +1066,9 @@ async function runScenario(browser, scenario, outDir, port) {
     const snapshot = await waitForScenario(
       page,
       consoleEvents,
-      readyWhen
+      readyWhen,
+      scenario.timeoutFailure ?? null,
+      scenario.stopOnFailure ?? true
     );
 
     const extraInteractions = scenario.afterReady
@@ -998,6 +1201,26 @@ async function main() {
           assert(snapshot, consoleEvents, interactions) {
             assertErrorOverlayCopyScenario(snapshot, consoleEvents, interactions);
           },
+        },
+        {
+          name: 'browser-rocq-sync-timeout-overlay',
+          rootScenario: 'rocq-sync-timeout-overlay',
+          permissions: ['clipboard-read', 'clipboard-write'],
+          query: 'rocq_sync_timeout_ms=750',
+          stopOnFailure: false,
+          readyWhen(current) {
+            return current.placeholder?.state === 'error'
+              && current.placeholder?.title === 'Rocq render sync timed out'
+              && current.errorCopy?.button?.visible === true;
+          },
+          async afterReady(page) {
+            return {
+              copyOverlay: await copyCurrentErrorOverlay(page),
+            };
+          },
+          assert(snapshot, consoleEvents, interactions) {
+            assertRocqSyncTimeoutScenario(snapshot, consoleEvents, interactions);
+          },
         }
       );
     }
@@ -1013,6 +1236,9 @@ async function main() {
           return {
             deployedAssetChecks: await inspectDeployedAssetCaching(DEPLOYED_URL),
           };
+        },
+        timeoutFailure(snapshot) {
+          return detectStalledRocqSync(snapshot);
         },
         assert(snapshot, consoleEvents, interactions) {
           assertDeployedPagesScenario(snapshot, consoleEvents, interactions);

@@ -35,12 +35,15 @@ THEORIES := \
 # packages built with our system Rocq 9.x; this flat-file approach
 # lets JsCoq compile the theories on the fly using only the stdlib.
 #
-# Proof-only Lemma/Theorem blocks are stripped from the bundle.  The
-# browser only needs the computational content (Definitions, Fixpoints,
-# Records, Inductive types) for Eval vm_compute queries — it never
-# invokes any lemma directly.  All proofs are still verified by the
-# desktop Rocq build (make test); the stripped bundle is leaner so
-# JsCoq compiles far fewer sentences on mobile devices.
+# Proofs (Lemma/Theorem blocks) are included in the bundle so users can
+# examine proof terms in the JsCoq IDE while they play.
+#
+# One Rocq 9.x → 8.17 compatibility fix is applied: `length_map` was
+# introduced as the canonical name in Rocq 8.20; JsCoq's older stdlib
+# only has `map_length` (deprecated in 9.x).  The sed pass below
+# rewrites every `apply length_map` and `rewrite length_map` occurrence
+# to the 8.17-compatible form so the full proof bundle compiles cleanly
+# under JsCoq.
 DOCS_THEORIES_DIR = docs/theories
 BSP_CORE_SRCS     = theories/BspBinary.v theories/BspEntity.v theories/GameState.v
 BSP_CORE_V        = $(DOCS_THEORIES_DIR)/BspCore.v
@@ -54,8 +57,7 @@ PAGES_MANIFEST    = $(ASSETS_DIR)/manifest.json
 $(BSP_CORE_V): $(BSP_CORE_SRCS)
 	mkdir -p $(DOCS_THEORIES_DIR)
 	{ cat $(BSP_CORE_SRCS); } \
-	  | sed -E '/^From Bsp Require Import /d; s/^From Stdlib Require Import ([^.]+)\.$$/Require Import \1./' \
-	  | awk '/^Lemma /{skip=1;next} /^Theorem /{skip=1;next} skip&&/Qed\./{skip=0;next} skip{next} {print}' \
+	  | sed -E '/^From Bsp Require Import /d; s/^From Stdlib Require Import ([^.]+)\.$$/Require Import \1./; s/\bapply length_map\b/apply map_length/g; s/\brewrite length_map\b/rewrite map_length/g' \
 	  > $@
 
 browser-theories: $(BSP_CORE_V)

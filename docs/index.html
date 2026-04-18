@@ -1497,6 +1497,40 @@
       // This resets the inactivity countdown so slow-but-progressing compilation
       // (e.g. stepping through 2000+ lines of theory) is never killed mid-flight.
       rocqSyncActivityReset?.();
+      // Update the loading overlay detail while the activity timeout is active
+      // (i.e. during load_world / withActivityTimeout).  Before that window the
+      // overlay is showing other phase messages; we leave those alone.
+      if (rocqSyncActivityReset !== null) {
+        updateRocqSyncOverlayProgress(normalized);
+      }
+    }
+
+    // Update the loading overlay detail text in response to bridge events that
+    // arrive while the Rocq sync activity timeout is running:
+    //
+    //   compile:sentence        — theory is still compiling; show per-sentence
+    //                             progress so the user knows Rocq is alive.
+    //   load_world:helpers-ready — compilation finished; restore the canonical
+    //                             "running queries" detail so the overlay is
+    //                             accurate for the query phase that follows.
+    //
+    // Only called while rocqSyncActivityReset is non-null (inside load_world).
+    function updateRocqSyncOverlayProgress(event) {
+      const { stage, payload } = event;
+      if (stage === 'compile:sentence') {
+        const n = payload?.sentenceIndex;
+        if (typeof n === 'number') {
+          placeholderDetail.textContent =
+            `Compiling game-core theory\u2026 ${n} ${n === 1 ? 'sentence' : 'sentences'} done`;
+          placeholderDetail.hidden = false;
+        }
+      } else if (stage === 'load_world:helpers-ready') {
+        // Theory compilation is complete; restore the canonical detail so the
+        // overlay doesn't continue to say "N sentences done" during queries.
+        placeholderDetail.textContent =
+          'Building the initial render snapshot from the verified game core.';
+        placeholderDetail.hidden = false;
+      }
     }
 
     function finishRocqSyncDiagnostics(state) {

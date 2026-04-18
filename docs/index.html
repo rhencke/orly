@@ -433,6 +433,77 @@
       display: none;
     }
 
+    #lower-panel-focus[hidden] {
+      display: none;
+    }
+
+    #lower-panel-focus {
+      display: flex;
+      flex-direction: column;
+      gap: 0.3rem;
+    }
+
+    #lower-panel-focus-label {
+      font-size: 0.68rem;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: #7f96c4;
+    }
+
+    #lower-panel-section-switcher {
+      display: flex;
+      gap: 0.35rem;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+
+    #lower-panel-section-switcher::-webkit-scrollbar {
+      display: none;
+    }
+
+    .lower-panel-section-button {
+      flex: 0 0 auto;
+      min-height: 2rem;
+      padding: 0.35rem 0.75rem;
+      border: 1px solid rgb(160 196 255 / 18%);
+      border-radius: 999px;
+      background: rgb(12 17 31 / 78%);
+      color: #b8c6e4;
+      font: inherit;
+      font-size: 0.78rem;
+      font-weight: 600;
+      line-height: 1.1;
+      cursor: pointer;
+      transition:
+        background-color 0.15s ease,
+        border-color 0.15s ease,
+        color 0.15s ease,
+        box-shadow 0.15s ease;
+    }
+
+    .lower-panel-section-button:hover:not(:disabled) {
+      border-color: rgb(160 196 255 / 34%);
+      color: #edf3ff;
+    }
+
+    .lower-panel-section-button.is-active {
+      border-color: rgb(160 196 255 / 48%);
+      background: linear-gradient(180deg, rgb(55 90 158 / 95%), rgb(36 61 109 / 95%));
+      color: #fff;
+      box-shadow: 0 0 0 1px rgb(160 196 255 / 16%);
+    }
+
+    .lower-panel-section-button:focus-visible {
+      outline: 2px solid #a0c4ff;
+      outline-offset: 2px;
+    }
+
+    .lower-panel-section-button:disabled {
+      opacity: 0.55;
+      cursor: default;
+    }
+
     #lower-panel-frame {
       flex: 1 1 auto;
       min-height: 0;
@@ -817,6 +888,43 @@
           <p id="lower-panel-copy">
             Keep the proof script, goals, and diagnostics together while the map stays playable above.
           </p>
+          <div id="lower-panel-focus" hidden>
+            <span id="lower-panel-focus-label">Focus</span>
+            <div
+              id="lower-panel-section-switcher"
+              role="toolbar"
+              aria-label="Focus lower-panel section"
+            >
+              <button
+                type="button"
+                class="lower-panel-section-button"
+                data-lower-panel-section="goals"
+                aria-pressed="true"
+                disabled
+              >Goals</button>
+              <button
+                type="button"
+                class="lower-panel-section-button"
+                data-lower-panel-section="messages"
+                aria-pressed="false"
+                disabled
+              >Messages</button>
+              <button
+                type="button"
+                class="lower-panel-section-button"
+                data-lower-panel-section="packages"
+                aria-pressed="false"
+                disabled
+              >Packages</button>
+              <button
+                type="button"
+                class="lower-panel-section-button"
+                data-lower-panel-section="help"
+                aria-pressed="false"
+                disabled
+              >Help</button>
+            </div>
+          </div>
         </div>
         <div id="lower-panel-frame">
           <div id="ide-wrapper" class="toggled">
@@ -1736,6 +1844,22 @@
 
     const MOBILE_JSCOQ_QUERY = '(pointer: coarse) and (max-width: 1023px)';
     const mobileJsCoqQuery = window.matchMedia(MOBILE_JSCOQ_QUERY);
+    const lowerPanelFocus = document.getElementById('lower-panel-focus');
+    const lowerPanelSectionButtons = Array.from(
+      document.querySelectorAll('.lower-panel-section-button')
+    );
+    const LOWER_PANEL_SECTIONS = ['goals', 'messages', 'packages', 'help'];
+    let activeLowerPanelSection = 'goals';
+    let jscoqManager = null;
+    let lowerPanelControlsBound = false;
+
+    function normalizeLowerPanelSection(section) {
+      return LOWER_PANEL_SECTIONS.includes(section) ? section : 'goals';
+    }
+
+    function getJsCoqFlexPanel(root, selector) {
+      return root?.querySelector(selector)?.closest('.flex-panel') ?? null;
+    }
 
     function setJsCoqLogLevel(layout, level) {
       if (!layout || typeof layout.filterLog !== 'function') return;
@@ -1752,10 +1876,137 @@
       }
     }
 
-    function collapseJsCoqFlexPanel(root, selector) {
-      const panel = root.querySelector(selector)?.closest('.flex-panel');
-      if (panel) panel.classList.add('collapsed');
+    function setJsCoqFlexPanelCollapsed(root, selector, collapsed) {
+      const panel = getJsCoqFlexPanel(root, selector);
+      if (panel) panel.classList.toggle('collapsed', collapsed);
+      return panel;
     }
+
+    function updateLowerPanelSectionButtons(activeSection, enabled = true) {
+      const section = normalizeLowerPanelSection(activeSection);
+      if (lowerPanelFocus) lowerPanelFocus.hidden = !enabled;
+
+      lowerPanelSectionButtons.forEach(button => {
+        const isActive = enabled && button.dataset.lowerPanelSection === section;
+        button.disabled = !enabled;
+        button.classList.toggle('is-active', isActive);
+        button.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+      });
+    }
+
+    function inferLowerPanelSection(coq) {
+      const panelRoot = coq?.layout?.panel;
+      if (!panelRoot) return activeLowerPanelSection;
+
+      const helpPanel = getJsCoqFlexPanel(panelRoot, '#help-panel');
+      if (panelRoot.classList.contains('show-help') &&
+          helpPanel &&
+          !helpPanel.classList.contains('collapsed')) {
+        return 'help';
+      }
+
+      const messagePanel = getJsCoqFlexPanel(panelRoot, '.msg-area');
+      if (messagePanel && !messagePanel.classList.contains('collapsed')) {
+        return 'messages';
+      }
+
+      const packagesPanel = getJsCoqFlexPanel(panelRoot, '#packages-panel');
+      if (packagesPanel && !packagesPanel.classList.contains('collapsed')) {
+        return 'packages';
+      }
+
+      return 'goals';
+    }
+
+    function syncLowerPanelSectionButtons(coq) {
+      activeLowerPanelSection = inferLowerPanelSection(coq);
+      updateLowerPanelSectionButtons(activeLowerPanelSection, Boolean(coq?.layout?.panel));
+    }
+
+    function focusLowerPanelSection(coq, requestedSection) {
+      const layout = coq?.layout;
+      const panelRoot = layout?.panel;
+      if (!layout || !panelRoot) return false;
+
+      const section = normalizeLowerPanelSection(requestedSection);
+      setJsCoqFlexPanelCollapsed(panelRoot, '#goal-panel', section !== 'goals');
+      setJsCoqFlexPanelCollapsed(panelRoot, '.msg-area', section !== 'messages');
+      setJsCoqFlexPanelCollapsed(panelRoot, '#packages-panel', section !== 'packages');
+      const helpPanel = setJsCoqFlexPanelCollapsed(panelRoot, '#help-panel', section !== 'help');
+
+      if (section === 'help') {
+        layout.showHelp?.();
+        helpPanel?.classList.remove('collapsed');
+      } else {
+        layout.hideHelp?.();
+      }
+
+      activeLowerPanelSection = section;
+      updateLowerPanelSectionButtons(section, true);
+      return true;
+    }
+
+    function lowerPanelSectionFromPanel(panel) {
+      if (!panel?.id) return null;
+      if (panel.id === 'goal-panel') return 'goals';
+      if (panel.id === 'query-panel') return 'messages';
+      if (panel.id === 'packages-panel') return 'packages';
+      if (panel.id === 'help-panel') return 'help';
+      return null;
+    }
+
+    function bindLowerPanelSectionSwitcher(coq) {
+      const panelRoot = coq?.layout?.panel;
+      if (!panelRoot) return;
+
+      if (!lowerPanelControlsBound) {
+        lowerPanelControlsBound = true;
+        lowerPanelSectionButtons.forEach(button => {
+          button.addEventListener('click', () => {
+            if (!jscoqManager) return;
+            focusLowerPanelSection(jscoqManager, button.dataset.lowerPanelSection);
+          });
+        });
+      }
+
+      if (panelRoot.dataset.orlyLowerPanelSectionBound === 'true') {
+        syncLowerPanelSectionButtons(coq);
+        return;
+      }
+
+      panelRoot.dataset.orlyLowerPanelSectionBound = 'true';
+      panelRoot.addEventListener('click', event => {
+        if (!jscoqManager) return;
+
+        if (event.target.closest('#help-panel button.btn-close')) {
+          window.setTimeout(() => {
+            focusLowerPanelSection(jscoqManager, 'goals');
+          }, 0);
+          return;
+        }
+
+        const caption = event.target.closest('.flex-panel > .caption');
+        if (!caption) return;
+
+        const section = lowerPanelSectionFromPanel(caption.parentElement);
+        if (!section) return;
+
+        window.setTimeout(() => {
+          focusLowerPanelSection(jscoqManager, section);
+        }, 0);
+      });
+
+      syncLowerPanelSectionButtons(coq);
+    }
+
+    mobileJsCoqQuery.addEventListener('change', event => {
+      if (!jscoqManager) return;
+      if (event.matches) {
+        applyMobileJsCoqDefaults(jscoqManager);
+        return;
+      }
+      syncLowerPanelSectionButtons(jscoqManager);
+    });
 
     function reinforceMobileJsCoqDefaults(coq, remainingPasses = 5) {
       applyMobileJsCoqDefaults(coq);
@@ -1774,9 +2025,7 @@
 
       layout.hideHelp?.();
       setJsCoqLogLevel(layout, 0);
-      collapseJsCoqFlexPanel(panelRoot, '#help-panel');
-      collapseJsCoqFlexPanel(panelRoot, '.msg-area');
-      collapseJsCoqFlexPanel(panelRoot, '#packages-panel');
+      focusLowerPanelSection(coq, activeLowerPanelSection);
     }
 
     let jscoqOk = false;
@@ -1818,9 +2067,13 @@
           all_pkgs:      ['coq'],
         }
       );
+      jscoqManager = coq;
+      bindLowerPanelSectionSwitcher(coq);
       reinforceMobileJsCoqDefaults(coq);
       coq.when_ready?.then(() => {
+        bindLowerPanelSectionSwitcher(coq);
         reinforceMobileJsCoqDefaults(coq);
+        syncLowerPanelSectionButtons(coq);
       });
       rocqBridge = createRocqBridge(coq, {
         onDiagnostic: recordRocqSyncDiagnostic,

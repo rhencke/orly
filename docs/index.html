@@ -17,6 +17,12 @@
   -->
   <script src="coi-serviceworker.js"></script>
 
+  <!--
+    JsCoq's ESM entrypoint does not auto-attach its frontend stylesheet.
+    Load it explicitly so the IDE panel uses the intended split layout.
+  -->
+  <link rel="stylesheet" href="./vendor/jscoq/dist/frontend/index.css">
+
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -1227,6 +1233,43 @@
       return null;
     }
 
+    const MOBILE_JSCOQ_QUERY = '(pointer: coarse) and (max-width: 1023px)';
+    const mobileJsCoqQuery = window.matchMedia(MOBILE_JSCOQ_QUERY);
+
+    function setJsCoqLogLevel(layout, level) {
+      if (!layout || typeof layout.filterLog !== 'function') return;
+      layout.filterLog(level);
+
+      const select = layout.panel?.querySelector?.('select[name="msg_filter"]');
+      if (!select) return;
+
+      const optionValue = typeof level === 'string'
+        ? layout.log_levels?.indexOf(level)
+        : level;
+      if (Number.isInteger(optionValue) && optionValue >= 0) {
+        select.value = String(optionValue);
+      }
+    }
+
+    function collapseJsCoqFlexPanel(root, selector) {
+      const panel = root.querySelector(selector)?.closest('.flex-panel');
+      if (panel) panel.classList.add('collapsed');
+    }
+
+    function applyMobileJsCoqDefaults(coq) {
+      if (!mobileJsCoqQuery.matches) return;
+
+      const layout = coq?.layout;
+      const panelRoot = layout?.panel;
+      if (!layout || !panelRoot) return;
+
+      layout.hideHelp?.();
+      setJsCoqLogLevel(layout, 0);
+      collapseJsCoqFlexPanel(panelRoot, '#help-panel');
+      collapseJsCoqFlexPanel(panelRoot, '.msg-area');
+      collapseJsCoqFlexPanel(panelRoot, '#packages-panel');
+    }
+
     let jscoqOk = false;
     let rocqBridge = null;
     let rocqBridgeWarmup = null;
@@ -1266,6 +1309,10 @@
           all_pkgs:      ['coq'],
         }
       );
+      applyMobileJsCoqDefaults(coq);
+      coq.when_ready?.then(() => {
+        applyMobileJsCoqDefaults(coq);
+      });
       rocqBridge = createRocqBridge(coq, {
         onDiagnostic: recordRocqSyncDiagnostic,
       });

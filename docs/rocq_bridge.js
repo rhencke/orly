@@ -347,6 +347,10 @@ export function createRocqBridge(manager, options = {}) {
   return {
     version: BRIDGE_VERSION,
 
+    async prepare() {
+      await getBridgeHelpersSid();
+    },
+
     async load_world(world) {
       emitDiagnostic(onDiagnostic, 'load_world:requested', summarizeWorld(world));
       const sid = await getBridgeHelpersSid();

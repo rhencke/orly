@@ -71,6 +71,8 @@ export function createRocqBridge(_manager, options = {}) {
   return {
     version: 1,
 
+    async prepare() {},
+
     async load_world(world) {
       visibleFaces = Array.isArray(world?.faces)
         ? world.faces.map((_, fi) => fi)
@@ -111,6 +113,8 @@ export function createRocqBridge(_manager, options = {}) {
 
   return {
     version: 1,
+
+    async prepare() {},
 
     async load_world(world) {
       emit('load_world:requested', {

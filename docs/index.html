@@ -1229,6 +1229,7 @@
 
     let jscoqOk = false;
     let rocqBridge = null;
+    let rocqBridgeWarmup = null;
     showPlaceholder(
       'Loading JsCoq and game theories…',
       'Fetching the Rocq runtime and the browser-side game theory bundle.'
@@ -1268,6 +1269,17 @@
       rocqBridge = createRocqBridge(coq, {
         onDiagnostic: recordRocqSyncDiagnostic,
       });
+      // Start compiling the bridge helpers immediately so theory loading
+      // overlaps asset fetch instead of blocking the first render sync.
+      rocqBridgeWarmup =
+        typeof rocqBridge.prepare === 'function'
+          ? rocqBridge.prepare()
+          : null;
+      if (rocqBridgeWarmup) {
+        rocqBridgeWarmup.catch(err => {
+          console.error('Rocq bridge warmup failed:', err);
+        });
+      }
       jscoqOk = true;
     } catch (err) {
       const msg = errorDetail(err);
@@ -1358,6 +1370,9 @@
 
         if (!rocqBridge) {
           throw new Error('Rocq bridge is unavailable');
+        }
+        if (rocqBridgeWarmup) {
+          await rocqBridgeWarmup;
         }
 
         showStatus('Syncing Rocq render state…');

@@ -1915,10 +1915,10 @@ async function exerciseKeyboardResize(page) {
   const handle = page.locator('#resize-handle');
   await handle.focus();
   const before = await gatherSnapshotWithRetry(page);
-  await page.keyboard.press('ArrowLeft');
+  await handle.press('ArrowLeft');
   await page.waitForTimeout(100);
   const afterGrow = await gatherSnapshotWithRetry(page);
-  await page.keyboard.press('ArrowRight');
+  await handle.press('ArrowRight');
   await page.waitForTimeout(100);
   const afterRestore = await gatherSnapshotWithRetry(page);
   return { before, afterGrow, afterRestore };

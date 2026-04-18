@@ -8,6 +8,9 @@ const MIN_GAME_STATE_WORDS_COUNT = 19;
 const GEOMETRY_Q_SCALE = 1000000;
 const CONTENTS_SOLID = 1;
 const CONTENTS_PLAYERCLIP = 65536;
+const SENTENCE_PHASE_PROCESSED = 'processed';
+const SENTENCE_PHASE_ERROR = 'error';
+const SENTENCE_PHASE_CANCELLING = 'cancelling';
 
 function nextTick() {
   return new Promise(resolve => setTimeout(resolve, 0));
@@ -273,22 +276,41 @@ async function waitForSentenceSid(sentence) {
   return sentence.coq_sid;
 }
 
-async function waitForSentenceProcessed(manager, sid) {
-  while (!manager.coq.sids?.[sid]?.promise) {
+async function waitForManagerReady(manager) {
+  if (manager?.when_ready?.promise) {
+    await manager.when_ready.promise;
+    return;
+  }
+  while (!manager?.coq) {
     await nextTick();
   }
-  await manager.coq.sids[sid].promise;
+}
+
+async function waitForSentenceProcessed(sentence, sid) {
+  while (true) {
+    const phase = typeof sentence?.phase === 'string' ? sentence.phase : '';
+    if (phase === SENTENCE_PHASE_PROCESSED) return;
+    if (phase === SENTENCE_PHASE_ERROR || phase === SENTENCE_PHASE_CANCELLING) {
+      throw new Error(`Rocq sentence ${sid} stopped before it finished processing (phase: ${phase})`);
+    }
+    await nextTick();
+  }
 }
 
 async function ensureBridgeHelpersReady(manager) {
+  await waitForManagerReady(manager);
+
   let sentence = manager.doc.sentences.find(stm =>
     stm.coq_sid && stm.text.includes(BRIDGE_HELPERS_DEFINITION));
-  if (sentence) return sentence.coq_sid;
+  if (sentence) {
+    await waitForSentenceProcessed(sentence, sentence.coq_sid);
+    return sentence.coq_sid;
+  }
 
   while (manager.goNext(false)) {
     sentence = manager.doc.sentences[manager.doc.sentences.length - 1];
     const sid = await waitForSentenceSid(sentence);
-    await waitForSentenceProcessed(manager, sid);
+    await waitForSentenceProcessed(sentence, sid);
     if (sentence.text.includes(BRIDGE_HELPERS_DEFINITION)) {
       return sid;
     }

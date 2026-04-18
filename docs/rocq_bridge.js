@@ -273,9 +273,14 @@ async function waitForSentenceSid(sentence) {
   return sentence.coq_sid;
 }
 
-async function ensureBridgeHelpersReady(manager) {
-  await manager.when_ready.promise;
+async function waitForSentenceProcessed(manager, sid) {
+  while (!manager.coq.sids?.[sid]?.promise) {
+    await nextTick();
+  }
+  await manager.coq.sids[sid].promise;
+}
 
+async function ensureBridgeHelpersReady(manager) {
   let sentence = manager.doc.sentences.find(stm =>
     stm.coq_sid && stm.text.includes(BRIDGE_HELPERS_DEFINITION));
   if (sentence) return sentence.coq_sid;
@@ -283,7 +288,7 @@ async function ensureBridgeHelpersReady(manager) {
   while (manager.goNext(false)) {
     sentence = manager.doc.sentences[manager.doc.sentences.length - 1];
     const sid = await waitForSentenceSid(sentence);
-    await manager.coq.sids[sid].promise;
+    await waitForSentenceProcessed(manager, sid);
     if (sentence.text.includes(BRIDGE_HELPERS_DEFINITION)) {
       return sid;
     }

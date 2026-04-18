@@ -1740,7 +1740,8 @@
         onDiagnostic: recordRocqSyncDiagnostic,
       });
       // Start compiling the bridge helpers immediately so theory loading
-      // overlaps asset fetch instead of blocking the first render sync.
+      // overlaps asset fetch. load_world waits on the same promise under
+      // the Rocq sync timeout, so users do not get stuck on the BSP parse UI.
       rocqBridgeWarmup =
         typeof rocqBridge.prepare === 'function'
           ? rocqBridge.prepare()
@@ -1846,18 +1847,14 @@
                     `${bsp.vertices.length} vertices, ` +
                     `${bsp.lightmaps.length} lightmaps`);
 
-        if (!rocqBridge) {
-          throw new Error('Rocq bridge is unavailable');
-        }
-        if (rocqBridgeWarmup) {
-          await rocqBridgeWarmup;
-        }
-
         showStatus('Syncing Rocq render state…');
         showPlaceholder(
           'Syncing Rocq render state…',
           'Building the initial render snapshot from the verified game core.'
         );
+        if (!rocqBridge) {
+          throw new Error('Rocq bridge is unavailable');
+        }
         const rocqSyncWorld = {
           entities: bsp.entities,
           faces: bsp.faces,

@@ -139,8 +139,144 @@ export function createRocqBridge(_manager, options = {}) {
 }
 `;
 
+async function withNodeTimeout(promise, timeoutMs, message) {
+  let timeoutId = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId !== null) clearTimeout(timeoutId);
+  }
+}
+
 async function sleep(ms) {
   await new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function runMissingSentencePromiseRegression() {
+  const scenario = 'bridge-missing-sentence-promise-regression';
+
+  try {
+    const { createRocqBridge } =
+      await import(new URL('../docs/rocq_bridge.js', import.meta.url));
+    const diagnostics = [];
+    const queryCalls = [];
+    const helperSentence = {
+      text: 'Definition step_world_words_in_world := step_world_words_in_world.',
+      coq_sid: 7,
+      phase: 'processing',
+    };
+    const manager = {
+      when_ready: {
+        promise: Promise.resolve(),
+      },
+      doc: {
+        sentences: [helperSentence],
+      },
+      goNext() {
+        return false;
+      },
+      pprint: {
+        pp2Text(message) {
+          return message;
+        },
+      },
+      coq: {
+        // The regression is that helper readiness must not depend on
+        // coq.sids[sid].promise existing on the manager.
+        queryPromise(sid, query) {
+          const command = Array.isArray(query) ? String(query[1] ?? '') : String(query ?? '');
+          queryCalls.push({ sid, command });
+
+          if (command.includes('initial_game_state_words_from_entities')) {
+            return Promise.resolve([
+              { msg: '= [0; 1; 0; 1; 0; 1; 0; 1; 0; 1; 0; 1; 0; 1; 0; 1; 1; 0; 0]' },
+            ]);
+          }
+          if (command.includes('initial_visible_faces_from_inputs')) {
+            return Promise.resolve([{ msg: '= []' }]);
+          }
+
+          throw new Error(`unexpected Rocq query in regression: ${command}`);
+        },
+      },
+    };
+    const bridge = createRocqBridge(manager, {
+      onDiagnostic(event) {
+        diagnostics.push(event);
+      },
+    });
+    const world = {
+      entities: [],
+      faces: [],
+      textures: [],
+      planes: [],
+      models: [],
+      brushes: [],
+      brushSides: [],
+    };
+
+    const preparePromise = bridge.prepare();
+    const loadWorldPromise = bridge.load_world(world);
+
+    setTimeout(() => {
+      helperSentence.phase = 'processed';
+    }, 25);
+
+    const snapshot = await withNodeTimeout(
+      loadWorldPromise,
+      1000,
+      'timed out waiting for load_world after load_world:requested without a JsCoq sentence promise'
+    );
+    await withNodeTimeout(
+      preparePromise,
+      1000,
+      'timed out waiting for prepare without a JsCoq sentence promise'
+    );
+
+    const stages = diagnostics.map(event => event.stage);
+    if (stages[0] !== 'load_world:requested') {
+      throw new Error(`unexpected first regression stage: ${stages[0] ?? '(missing)'}`);
+    }
+    if (!stages.includes('load_world:helpers-ready')) {
+      throw new Error('helper readiness regression never reached load_world:helpers-ready');
+    }
+    if (!stages.includes('load_world:complete')) {
+      throw new Error('helper readiness regression never reached load_world:complete');
+    }
+    if (queryCalls.length !== 2) {
+      throw new Error(`expected two Rocq queries in regression, got ${queryCalls.length}`);
+    }
+    if (!Array.isArray(snapshot.visibleFaces)) {
+      throw new Error('regression snapshot did not include visibleFaces');
+    }
+
+    return {
+      scenario,
+      passed: true,
+      details: {
+        diagnostics,
+        queryCalls,
+        snapshot: {
+          position: snapshot.position,
+          yaw: snapshot.yaw,
+          pitch: snapshot.pitch,
+          visibleFaceCount: snapshot.visibleFaces.length,
+        },
+      },
+    };
+  } catch (error) {
+    return {
+      scenario,
+      passed: false,
+      failure: error.message,
+      stack: error.stack ?? '',
+    };
+  }
 }
 
 async function waitForUrl(url, timeoutMs) {
@@ -1396,6 +1532,10 @@ async function main() {
     const outDir = await fs.mkdtemp(path.join(os.tmpdir(), 'orly-licensed-map-regression-'));
     const diagnosticsPath = path.join(outDir, 'diagnostics.json');
     const scenarios = [];
+
+    if (!SKIP_LOCAL_SCENARIOS) {
+      scenarios.push(await runMissingSentencePromiseRegression());
+    }
 
     const scenarioConfigs = [];
 

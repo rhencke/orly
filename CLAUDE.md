@@ -19,7 +19,7 @@ For changes that touch browser-side code (`docs/*.js`, `docs/index.html`,
 layout, UI behaviour, rendering), also run the Playwright suite:
 
 ```bash
-npm run test:q3dm1-browser   # full local browser scenario suite
+npm run test:browser   # full local browser scenario suite
 ```
 
 This spins up a headless Chromium instance and exercises: no-assets load,

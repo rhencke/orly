@@ -299,6 +299,125 @@ async function runMissingSentencePromiseRegression() {
   }
 }
 
+async function runCompileSentenceDiagnosticsRegression() {
+  const scenario = 'bridge-compile-sentence-diagnostics-regression';
+
+  try {
+    const { createRocqBridge } =
+      await import(new URL('../docs/rocq_bridge.js', import.meta.url));
+    const diagnostics = [];
+    const queryCalls = [];
+
+    // Three sentences: two non-target, then the target (contains
+    // BRIDGE_HELPERS_DEFINITION).  goNext() adds them one at a time so the
+    // loop in ensureBridgeHelpersReady exercises the compile:sentence path.
+    const sentences = [
+      { text: 'Require Import Foo.',           coq_sid: null, phase: 'processing' },
+      { text: 'Definition bar := 42.',          coq_sid: null, phase: 'processing' },
+      {
+        text: 'Definition step_world_words_in_world := step_world_words_in_world.',
+        coq_sid: null,
+        phase: 'processing',
+      },
+    ];
+    let goNextCallCount = 0;
+
+    const manager = {
+      when_ready: { promise: Promise.resolve() },
+      doc: { sentences: [] },
+      goNext() {
+        if (goNextCallCount >= sentences.length) return false;
+        const sentence = sentences[goNextCallCount];
+        goNextCallCount++;
+        manager.doc.sentences.push(sentence);
+        // coq_sid assigned synchronously; phase transitions after a short delay
+        // so waitForSentenceProcessed has something to poll.
+        sentence.coq_sid = goNextCallCount;
+        const delay = 10 * goNextCallCount;
+        setTimeout(() => { sentence.phase = 'processed'; }, delay);
+        return true;
+      },
+      pprint: { pp2Text(message) { return message; } },
+      coq: {
+        queryPromise(sid, query) {
+          const command = Array.isArray(query) ? String(query[1] ?? '') : String(query ?? '');
+          queryCalls.push({ sid, command });
+          if (command.includes('initial_game_state_words_from_entities')) {
+            return Promise.resolve([
+              { msg: '= [0; 1; 0; 1; 0; 1; 0; 1; 0; 1; 0; 1; 0; 1; 0; 1; 1; 0; 0]' },
+            ]);
+          }
+          if (command.includes('initial_visible_faces_from_inputs')) {
+            return Promise.resolve([{ msg: '= []' }]);
+          }
+          throw new Error(`unexpected Rocq query in regression: ${command}`);
+        },
+      },
+    };
+
+    const bridge = createRocqBridge(manager, {
+      onDiagnostic(event) { diagnostics.push(event); },
+    });
+    const world = {
+      entities: [], faces: [], textures: [], planes: [],
+      models: [], brushes: [], brushSides: [],
+    };
+
+    const snapshot = await withNodeTimeout(
+      bridge.load_world(world),
+      2000,
+      'timed out waiting for load_world during compile-sentence regression'
+    );
+
+    const stages = diagnostics.map(event => event.stage);
+    const compileSentenceEvents = diagnostics.filter(event => event.stage === 'compile:sentence');
+
+    if (compileSentenceEvents.length !== 3) {
+      throw new Error(
+        `expected 3 compile:sentence events, got ${compileSentenceEvents.length}`
+      );
+    }
+
+    for (let i = 0; i < compileSentenceEvents.length; i++) {
+      const { sentenceIndex, isTarget } = compileSentenceEvents[i].payload;
+      if (sentenceIndex !== i + 1) {
+        throw new Error(
+          `compile:sentence[${i}].sentenceIndex should be ${i + 1}, got ${sentenceIndex}`
+        );
+      }
+      const expectedTarget = i === compileSentenceEvents.length - 1;
+      if (isTarget !== expectedTarget) {
+        throw new Error(
+          `compile:sentence[${i}].isTarget should be ${expectedTarget}, got ${isTarget}`
+        );
+      }
+    }
+
+    if (!stages.includes('load_world:helpers-ready')) {
+      throw new Error('compile-sentence regression never reached load_world:helpers-ready');
+    }
+    if (!stages.includes('load_world:complete')) {
+      throw new Error('compile-sentence regression never completed load_world');
+    }
+    if (!Array.isArray(snapshot.visibleFaces)) {
+      throw new Error('compile-sentence regression snapshot did not include visibleFaces');
+    }
+
+    return {
+      scenario,
+      passed: true,
+      details: { diagnostics, compileSentenceEvents, queryCalls },
+    };
+  } catch (error) {
+    return {
+      scenario,
+      passed: false,
+      failure: error.message,
+      stack: error.stack ?? '',
+    };
+  }
+}
+
 async function waitForUrl(url, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   let lastError = null;
@@ -1838,6 +1957,7 @@ async function main() {
 
     if (!SKIP_LOCAL_SCENARIOS) {
       scenarios.push(await runMissingSentencePromiseRegression());
+      scenarios.push(await runCompileSentenceDiagnosticsRegression());
     }
 
     const scenarioConfigs = [];

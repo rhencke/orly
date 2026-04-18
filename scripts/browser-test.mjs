@@ -71,7 +71,9 @@ export function createRocqBridge(_manager, options = {}) {
   return {
     version: 1,
 
-    async prepare() {},
+    async prepare() {
+      emit('rocq:alive', {});
+    },
 
     async load_world(world) {
       visibleFaces = Array.isArray(world?.faces)
@@ -114,7 +116,9 @@ export function createRocqBridge(_manager, options = {}) {
   return {
     version: 1,
 
-    async prepare() {},
+    async prepare() {
+      emit('rocq:alive', {});
+    },
 
     async load_world(world) {
       emit('load_world:requested', {
@@ -241,6 +245,9 @@ async function runMissingSentencePromiseRegression() {
     const stages = diagnostics.map(event => event.stage);
     if (stages[0] !== 'load_world:requested') {
       throw new Error(`unexpected first regression stage: ${stages[0] ?? '(missing)'}`);
+    }
+    if (!stages.includes('rocq:alive')) {
+      throw new Error('helper readiness regression never received rocq:alive heartbeat');
     }
     if (!stages.includes('load_world:helpers-ready')) {
       throw new Error('helper readiness regression never reached load_world:helpers-ready');

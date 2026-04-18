@@ -297,8 +297,9 @@ async function waitForSentenceProcessed(sentence, sid) {
   }
 }
 
-async function ensureBridgeHelpersReady(manager) {
+async function ensureBridgeHelpersReady(manager, onDiagnostic = null) {
   await waitForManagerReady(manager);
+  emitDiagnostic(onDiagnostic, 'rocq:alive', {});
 
   let sentence = manager.doc.sentences.find(stm =>
     stm.coq_sid && stm.text.includes(BRIDGE_HELPERS_DEFINITION));
@@ -363,7 +364,7 @@ export function createRocqBridge(manager, options = {}) {
     typeof options.onDiagnostic === 'function' ? options.onDiagnostic : null;
 
   function getBridgeHelpersSid() {
-    bridgeHelpersSidPromise ||= ensureBridgeHelpersReady(manager);
+    bridgeHelpersSidPromise ||= ensureBridgeHelpersReady(manager, onDiagnostic);
     return bridgeHelpersSidPromise;
   }
 

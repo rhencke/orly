@@ -2323,15 +2323,16 @@ async function main() {
           // the full pipeline runs: JsCoq compiles the theory on the fly,
           // the bridge queries run, and the render loop starts.
           //
-          // Compilation of ~2290 lines with 97 proof lemmas is slow;
-          // timeoutMs is set to 3 minutes so headless CI has breathing room
+          // In CI the theory takes ~200 s to compile (374 sentences at
+          // ~0.48 s/sentence before reaching the bridge-helper target).
+          // timeoutMs is set to 5 minutes so headless CI has breathing room
           // on constrained hardware.
           name: 'full-theory-with-proofs-compiles',
           rootScenario: 'full-theory-with-proofs-compiles',
           contextOptions: {
             viewport: { width: 1280, height: 720 },
           },
-          timeoutMs: 180000,
+          timeoutMs: 300000,
           assert(snapshot, consoleEvents) {
             assertFullTheoryWithProofsCompilesScenario(snapshot, consoleEvents);
           },

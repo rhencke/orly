@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - Dockerfile
+  workflow_dispatch:
 
 jobs:
   publish:
@@ -15,6 +16,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Log in to ghcr.io
         uses: docker/login-action@v3
@@ -31,3 +35,5 @@ jobs:
           tags: |
             ghcr.io/rhencke/orly:latest
             ghcr.io/rhencke/orly:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -780,8 +780,6 @@ function assertRealBridgeParseHandoffScenario(snapshot, consoleEvents) {
 }
 
 function assertDeployedPagesScenario(snapshot, consoleEvents, interactions) {
-  assertDesktopRenderStartupScenario(snapshot, consoleEvents);
-
   const assetChecks = interactions.deployedAssetChecks;
   if (!assetChecks) {
     throw new Error('deployed asset diagnostics missing');
@@ -817,6 +815,30 @@ function assertDeployedPagesScenario(snapshot, consoleEvents, interactions) {
       `deployed BSP conditional HEAD should return 304, got ${assetChecks.revalidateHead?.status ?? 'unknown'}`
     );
   }
+
+  const failure = detectFailure(snapshot, consoleEvents);
+  if (!failure) {
+    assertDesktopRenderStartupScenario(snapshot, consoleEvents);
+    return;
+  }
+
+  const copy = interactions.copyOverlay;
+  if (!copy) {
+    throw new Error(`${failure}\ndeployed error overlay was not captured`);
+  }
+
+  const capturedText = copy.fallbackText || copy.clipboardText || '';
+  if (capturedText.length === 0) {
+    throw new Error(`${failure}\ndeployed error overlay copy payload was empty`);
+  }
+  if (!capturedText.includes('Page URL: https://rhencke.github.io/orly/')) {
+    throw new Error(`${failure}\ndeployed error overlay copy payload was missing the page URL`);
+  }
+  if (!capturedText.includes('Source: ')) {
+    throw new Error(`${failure}\ndeployed error overlay copy payload was missing the error source`);
+  }
+
+  throw new Error(`${failure}\nCaptured deployed error report:\n${capturedText}`);
 }
 
 function assertRectWithinViewport(name, rect, viewport) {
@@ -1212,6 +1234,14 @@ async function copyCurrentErrorOverlay(page) {
   };
 }
 
+async function copyCurrentErrorOverlayIfVisible(page) {
+  const copyButton = page.locator('#copy-error-report');
+  if (!await copyButton.isVisible().catch(() => false)) {
+    return null;
+  }
+  return copyCurrentErrorOverlay(page);
+}
+
 async function exerciseErrorOverlayCopy(page) {
   await page.evaluate(() => {
     const error = new Error('Copy smoke error');
@@ -1264,6 +1294,7 @@ async function runScenario(browser, scenario, outDir, port) {
   const consoleEvents = [];
   let context = null;
   let page = null;
+  let interactions = null;
 
   try {
     await waitForUrl(url, scenario.url ? 30000 : 10000).catch(error => {
@@ -1296,13 +1327,12 @@ async function runScenario(browser, scenario, outDir, port) {
       scenario.stopOnFailure ?? true
     );
 
-    const extraInteractions = scenario.afterReady
-      ? await scenario.afterReady(page)
-      : null;
-    const interactions = {
+    interactions = {
       readySnapshot: snapshot,
-      ...(extraInteractions ?? {}),
     };
+    if (scenario.afterReady) {
+      Object.assign(interactions, await scenario.afterReady(page, snapshot, consoleEvents));
+    }
     const finalSnapshot = await gatherSnapshotWithRetry(page);
 
     const screenshotPath = path.join(outDir, `${scenario.name}.png`);
@@ -1332,6 +1362,7 @@ async function runScenario(browser, scenario, outDir, port) {
       url,
       failure: error.message,
       snapshot: failureSnapshot,
+      interactions,
       consoleEvents,
       serverLogs: serverInfo?.readLogs() ?? null,
       screenshotPath,
@@ -1472,9 +1503,16 @@ async function main() {
         contextOptions: {
           viewport: { width: 1280, height: 720 },
         },
-        async afterReady() {
+        permissions: ['clipboard-read', 'clipboard-write'],
+        async afterReady(page, snapshot, consoleEvents) {
+          const shouldCaptureErrorOverlay = Boolean(detectFailure(snapshot, consoleEvents));
+          const [deployedAssetChecks, copyOverlay] = await Promise.all([
+            inspectDeployedAssetCaching(DEPLOYED_URL),
+            shouldCaptureErrorOverlay ? copyCurrentErrorOverlayIfVisible(page) : Promise.resolve(null),
+          ]);
           return {
-            deployedAssetChecks: await inspectDeployedAssetCaching(DEPLOYED_URL),
+            deployedAssetChecks,
+            copyOverlay,
           };
         },
         timeoutFailure(snapshot) {

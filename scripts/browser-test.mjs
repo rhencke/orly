@@ -1439,7 +1439,11 @@ function assertLoadWorldRocqQueriesSucceedScenario(snapshot, consoleEvents) {
 
   if (!events.some(e => e.stage === 'load_world:decoded')) {
     const failure = detectFailure(snapshot, consoleEvents);
-    if (failure) {
+    // render-startup-failed on CI is caused by GPU context loss during heavy
+    // WASM compilation and is unrelated to query correctness.  Throw a more
+    // specific message so the failure points at the query path, not the
+    // renderer.
+    if (failure && !failure.startsWith('render-startup-failed')) {
       throw new Error(`load-world queries: ${failure}`);
     }
     throw new Error(
@@ -2396,22 +2400,35 @@ async function main() {
           // return parseable data — it cannot be emitted if either query
           // fails with "reference was not found in the current environment".
           //
-          // timeoutMs is set to 6 minutes: theory compilation takes ~230 s
-          // on CI hardware, and the two eval queries add further time on
-          // top of helpers-ready.
+          // rocq_sync_timeout_ms is set to 10 minutes so the eval queries
+          // have room to complete on constrained CI hardware (the default
+          // 60 s inactivity timeout is too short — the queries can take
+          // several minutes after helpers-ready).  timeoutMs (10 min) covers
+          // theory compilation (~230 s) plus both query executions.
+          //
+          // stopOnFailure is false so that a WebGL context loss during heavy
+          // WASM compilation (which logs "BSP render init failed") does not
+          // abort polling before load_world:decoded fires.  The render layer
+          // is verified separately by the licensed-map-render-startup
+          // scenarios; this scenario only cares about the Rocq query path.
           name: 'load-world-rocq-queries-succeed',
           rootScenario: 'load-world-rocq-queries-succeed',
           contextOptions: {
             viewport: { width: 1280, height: 720 },
           },
-          timeoutMs: 360000,
+          query: 'rocq_sync_timeout_ms=600000',
+          timeoutMs: 600000,
+          stopOnFailure: false,
           readyWhen(current) {
             // Wait for both eval queries to finish and their results to be
             // decoded — that is the earliest point load_world:decoded fires.
-            return Array.isArray(current.rocqSyncDiagnostics?.events) &&
-              current.rocqSyncDiagnostics.events.some(
-                e => e.stage === 'load_world:decoded'
-              );
+            // Also stop early on load_world:failed so we surface the error
+            // quickly rather than burning the full 10-minute budget.
+            const events = current.rocqSyncDiagnostics?.events;
+            if (!Array.isArray(events)) return false;
+            return events.some(
+              e => e.stage === 'load_world:decoded' || e.stage === 'load_world:failed'
+            );
           },
           assert(snapshot, consoleEvents) {
             assertLoadWorldRocqQueriesSucceedScenario(snapshot, consoleEvents);

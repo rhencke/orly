@@ -595,6 +595,7 @@ async function createScenarioRoot(scenarioName) {
   if (scenarioName === 'licensed-map-render-startup' ||
       scenarioName === 'licensed-map-parse-handoff' ||
       scenarioName === 'full-theory-with-proofs-compiles' ||
+      scenarioName === 'load-world-rocq-queries-succeed' ||
       scenarioName === 'rocq-sync-timeout-overlay' ||
       scenarioName === 'slow-compile-overlay') {
     await fs.mkdir(path.join(rootDir, 'assets', 'maps'), { recursive: true });
@@ -1404,6 +1405,63 @@ function assertFullTheoryWithProofsCompilesScenario(snapshot, consoleEvents) {
       'theory did not finish compiling or JsCoq worker stalled'
     );
   }
+}
+
+// Asserts that the Rocq eval queries issued by the bridge's load_world path
+// — specifically `initial_game_state_words_from_entities` and
+// `initial_visible_faces_from_inputs` — resolve without a "reference was not
+// found in the current environment" error (regression guard for #54, where
+// the definition order in BspCore.v put the queried function after the
+// bridge-helper marker, so the query fired before the definition existed).
+//
+// The presence of `load_world:decoded` proves both queryPromise calls
+// returned data that was successfully parsed — neither query can fail silently
+// because bridge.load_world() throws (and emits `load_world:failed`) on any
+// error from evalInitialGameStateWords or evalVisibleFaces.
+function assertLoadWorldRocqQueriesSucceedScenario(snapshot, consoleEvents) {
+  if (!snapshot.jscoqLoaded) {
+    throw new Error('load-world queries: JsCoq editor did not load');
+  }
+
+  const events = Array.isArray(snapshot.rocqSyncDiagnostics?.events)
+    ? snapshot.rocqSyncDiagnostics.events
+    : [];
+
+  // Pass as soon as load_world:decoded has fired at least once — that proves
+  // both queryPromise calls returned parseable data.  The game may call
+  // load_world multiple times (e.g. on window focus), and a later call can
+  // fail for unrelated reasons (renderer reset, WebGL context loss) without
+  // invalidating the first successful result.  We therefore check decoded
+  // before failed so a subsequent failure does not mask an earlier success.
+  if (events.some(e => e.stage === 'load_world:decoded')) {
+    return;
+  }
+
+  // decoded never fired — check for an explicit query failure first, then
+  // fall back to other detected failures or a generic timeout message.
+  const failedEvent = events.find(e => e.stage === 'load_world:failed');
+  if (failedEvent) {
+    const payload = failedEvent.payload
+      ? ` — ${JSON.stringify(failedEvent.payload)}`
+      : '';
+    throw new Error(
+      `load-world queries: load_world:failed fired; Rocq eval query did not resolve${payload}`
+    );
+  }
+
+  const failure = detectFailure(snapshot, consoleEvents);
+  // render-startup-failed on CI is caused by GPU context loss during heavy
+  // WASM compilation and is unrelated to query correctness.  Throw a more
+  // specific message so the failure points at the query path, not the
+  // renderer.
+  if (failure && !failure.startsWith('render-startup-failed')) {
+    throw new Error(`load-world queries: ${failure}`);
+  }
+  throw new Error(
+    'load-world queries: load_world:decoded never fired — ' +
+    'one or both Rocq eval queries (initial_game_state_words_from_entities, ' +
+    'initial_visible_faces_from_inputs) did not complete'
+  );
 }
 
 function assertDeployedPagesScenario(snapshot, consoleEvents, interactions) {
@@ -2336,6 +2394,61 @@ async function main() {
           },
           assert(snapshot, consoleEvents) {
             assertFullTheoryWithProofsCompilesScenario(snapshot, consoleEvents);
+          },
+        },
+        {
+          // Regression guard for #54: verifies that both Rocq eval queries
+          // issued by load_world (initial_game_state_words_from_entities and
+          // initial_visible_faces_from_inputs) complete successfully after
+          // bridge helpers are compiled.
+          //
+          // The root cause of #54 was a definition-order bug in BspCore.v:
+          // the bridge marker (step_world_words_in_world) came before
+          // initial_game_state_words_from_entities, so the query fired
+          // against an environment that did not yet know the function.
+          // load_world:decoded only fires when both queryPromise calls
+          // return parseable data — it cannot be emitted if either query
+          // fails with "reference was not found in the current environment".
+          //
+          // rocq_sync_timeout_ms is set to 10 minutes so the eval queries
+          // have room to complete on constrained CI hardware (the default
+          // 60 s inactivity timeout is too short — the queries can take
+          // several minutes after helpers-ready).  timeoutMs (20 min) covers
+          // theory compilation (~230 s on CI) plus multiple query retry
+          // attempts (the first load_world call can fail transiently with a
+          // JsCoq stack overflow on large entity expressions, and subsequent
+          // calls need time to succeed).
+          //
+          // stopOnFailure is false so that a WebGL context loss during heavy
+          // WASM compilation (which logs "BSP render init failed") does not
+          // abort polling before load_world:decoded fires.  The render layer
+          // is verified separately by the licensed-map-render-startup
+          // scenarios; this scenario only cares about the Rocq query path.
+          name: 'load-world-rocq-queries-succeed',
+          rootScenario: 'load-world-rocq-queries-succeed',
+          contextOptions: {
+            viewport: { width: 1280, height: 720 },
+          },
+          query: 'rocq_sync_timeout_ms=1200000',
+          timeoutMs: 1200000,
+          stopOnFailure: false,
+          readyWhen(current) {
+            // Wait for load_world:decoded — that fires once both Rocq eval
+            // queries have returned parseable data.
+            //
+            // Deliberately do NOT stop on load_world:failed.  The game calls
+            // load_world multiple times (e.g. on window refocus), and the
+            // first call can fail transiently (JsCoq stack overflow on large
+            // entity expressions) while later calls succeed.  Stopping on
+            // the first failed event would cut polling before a subsequent
+            // successful decoded event could be observed.  The 20-minute
+            // timeoutMs covers theory compilation + query retries.
+            const events = current.rocqSyncDiagnostics?.events;
+            if (!Array.isArray(events)) return false;
+            return events.some(e => e.stage === 'load_world:decoded');
+          },
+          assert(snapshot, consoleEvents) {
+            assertLoadWorldRocqQueriesSucceedScenario(snapshot, consoleEvents);
           },
         },
         {

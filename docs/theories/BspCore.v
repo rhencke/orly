@@ -1914,14 +1914,6 @@ Definition step_world_words (ws : list Z) (input : input_snapshot)
   | Some gs => game_state_to_words (step_world gs input)
   end.
 
-Definition step_world_words_in_world
-    (world : collision_world_input)
-    (ws : list Z) (input : input_snapshot) : list Z :=
-  match game_state_from_words ws with
-  | None    => ws
-  | Some gs => game_state_to_words (step_world_in_world world gs input)
-  end.
-
 (** Bridge-facing entry point for [load_world].  Returns the initial
     game-state word list from parsed entity data.  Used alongside
     [initial_visible_faces_from_inputs] to populate the first
@@ -1929,6 +1921,14 @@ Definition step_world_words_in_world
 Definition initial_game_state_words_from_entities
     (entities : list bsp_entity) : list Z :=
   game_state_to_words (game_state_from_entities entities).
+
+Definition step_world_words_in_world
+    (world : collision_world_input)
+    (ws : list Z) (input : input_snapshot) : list Z :=
+  match game_state_from_words ws with
+  | None    => ws
+  | Some gs => game_state_to_words (step_world_in_world world gs input)
+  end.
 
 (* ------------------------------------------------------------------ *)
 (** ** Correctness lemmas for world stepping                           *)

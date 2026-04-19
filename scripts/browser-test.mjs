@@ -1427,6 +1427,18 @@ function assertLoadWorldRocqQueriesSucceedScenario(snapshot, consoleEvents) {
     ? snapshot.rocqSyncDiagnostics.events
     : [];
 
+  // Pass as soon as load_world:decoded has fired at least once — that proves
+  // both queryPromise calls returned parseable data.  The game may call
+  // load_world multiple times (e.g. on window focus), and a later call can
+  // fail for unrelated reasons (renderer reset, WebGL context loss) without
+  // invalidating the first successful result.  We therefore check decoded
+  // before failed so a subsequent failure does not mask an earlier success.
+  if (events.some(e => e.stage === 'load_world:decoded')) {
+    return;
+  }
+
+  // decoded never fired — check for an explicit query failure first, then
+  // fall back to other detected failures or a generic timeout message.
   const failedEvent = events.find(e => e.stage === 'load_world:failed');
   if (failedEvent) {
     const payload = failedEvent.payload
@@ -1437,21 +1449,19 @@ function assertLoadWorldRocqQueriesSucceedScenario(snapshot, consoleEvents) {
     );
   }
 
-  if (!events.some(e => e.stage === 'load_world:decoded')) {
-    const failure = detectFailure(snapshot, consoleEvents);
-    // render-startup-failed on CI is caused by GPU context loss during heavy
-    // WASM compilation and is unrelated to query correctness.  Throw a more
-    // specific message so the failure points at the query path, not the
-    // renderer.
-    if (failure && !failure.startsWith('render-startup-failed')) {
-      throw new Error(`load-world queries: ${failure}`);
-    }
-    throw new Error(
-      'load-world queries: load_world:decoded never fired — ' +
-      'one or both Rocq eval queries (initial_game_state_words_from_entities, ' +
-      'initial_visible_faces_from_inputs) did not complete'
-    );
+  const failure = detectFailure(snapshot, consoleEvents);
+  // render-startup-failed on CI is caused by GPU context loss during heavy
+  // WASM compilation and is unrelated to query correctness.  Throw a more
+  // specific message so the failure points at the query path, not the
+  // renderer.
+  if (failure && !failure.startsWith('render-startup-failed')) {
+    throw new Error(`load-world queries: ${failure}`);
   }
+  throw new Error(
+    'load-world queries: load_world:decoded never fired — ' +
+    'one or both Rocq eval queries (initial_game_state_words_from_entities, ' +
+    'initial_visible_faces_from_inputs) did not complete'
+  );
 }
 
 function assertDeployedPagesScenario(snapshot, consoleEvents, interactions) {

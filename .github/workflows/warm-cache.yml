@@ -1,0 +1,26 @@
+name: Warm Docker cache
+
+on:
+  schedule:
+    - cron: '0 0 */6 * *'  # every 6 days — GHA cache TTL is 7 days
+  workflow_dispatch:
+
+jobs:
+  warm:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build (cache only — no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

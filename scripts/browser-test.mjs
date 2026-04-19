@@ -595,6 +595,7 @@ async function createScenarioRoot(scenarioName) {
   if (scenarioName === 'licensed-map-render-startup' ||
       scenarioName === 'licensed-map-parse-handoff' ||
       scenarioName === 'full-theory-with-proofs-compiles' ||
+      scenarioName === 'load-world-rocq-queries-succeed' ||
       scenarioName === 'rocq-sync-timeout-overlay' ||
       scenarioName === 'slow-compile-overlay') {
     await fs.mkdir(path.join(rootDir, 'assets', 'maps'), { recursive: true });
@@ -1402,6 +1403,49 @@ function assertFullTheoryWithProofsCompilesScenario(snapshot, consoleEvents) {
     throw new Error(
       'full-theory compile: load_world:helpers-ready never fired — ' +
       'theory did not finish compiling or JsCoq worker stalled'
+    );
+  }
+}
+
+// Asserts that the Rocq eval queries issued by the bridge's load_world path
+// — specifically `initial_game_state_words_from_entities` and
+// `initial_visible_faces_from_inputs` — resolve without a "reference was not
+// found in the current environment" error (regression guard for #54, where
+// the definition order in BspCore.v put the queried function after the
+// bridge-helper marker, so the query fired before the definition existed).
+//
+// The presence of `load_world:decoded` proves both queryPromise calls
+// returned data that was successfully parsed — neither query can fail silently
+// because bridge.load_world() throws (and emits `load_world:failed`) on any
+// error from evalInitialGameStateWords or evalVisibleFaces.
+function assertLoadWorldRocqQueriesSucceedScenario(snapshot, consoleEvents) {
+  if (!snapshot.jscoqLoaded) {
+    throw new Error('load-world queries: JsCoq editor did not load');
+  }
+
+  const events = Array.isArray(snapshot.rocqSyncDiagnostics?.events)
+    ? snapshot.rocqSyncDiagnostics.events
+    : [];
+
+  const failedEvent = events.find(e => e.stage === 'load_world:failed');
+  if (failedEvent) {
+    const payload = failedEvent.payload
+      ? ` — ${JSON.stringify(failedEvent.payload)}`
+      : '';
+    throw new Error(
+      `load-world queries: load_world:failed fired; Rocq eval query did not resolve${payload}`
+    );
+  }
+
+  if (!events.some(e => e.stage === 'load_world:decoded')) {
+    const failure = detectFailure(snapshot, consoleEvents);
+    if (failure) {
+      throw new Error(`load-world queries: ${failure}`);
+    }
+    throw new Error(
+      'load-world queries: load_world:decoded never fired — ' +
+      'one or both Rocq eval queries (initial_game_state_words_from_entities, ' +
+      'initial_visible_faces_from_inputs) did not complete'
     );
   }
 }
@@ -2336,6 +2380,41 @@ async function main() {
           },
           assert(snapshot, consoleEvents) {
             assertFullTheoryWithProofsCompilesScenario(snapshot, consoleEvents);
+          },
+        },
+        {
+          // Regression guard for #54: verifies that both Rocq eval queries
+          // issued by load_world (initial_game_state_words_from_entities and
+          // initial_visible_faces_from_inputs) complete successfully after
+          // bridge helpers are compiled.
+          //
+          // The root cause of #54 was a definition-order bug in BspCore.v:
+          // the bridge marker (step_world_words_in_world) came before
+          // initial_game_state_words_from_entities, so the query fired
+          // against an environment that did not yet know the function.
+          // load_world:decoded only fires when both queryPromise calls
+          // return parseable data — it cannot be emitted if either query
+          // fails with "reference was not found in the current environment".
+          //
+          // timeoutMs is set to 6 minutes: theory compilation takes ~230 s
+          // on CI hardware, and the two eval queries add further time on
+          // top of helpers-ready.
+          name: 'load-world-rocq-queries-succeed',
+          rootScenario: 'load-world-rocq-queries-succeed',
+          contextOptions: {
+            viewport: { width: 1280, height: 720 },
+          },
+          timeoutMs: 360000,
+          readyWhen(current) {
+            // Wait for both eval queries to finish and their results to be
+            // decoded — that is the earliest point load_world:decoded fires.
+            return Array.isArray(current.rocqSyncDiagnostics?.events) &&
+              current.rocqSyncDiagnostics.events.some(
+                e => e.stage === 'load_world:decoded'
+              );
+          },
+          assert(snapshot, consoleEvents) {
+            assertLoadWorldRocqQueriesSucceedScenario(snapshot, consoleEvents);
           },
         },
         {

@@ -2430,15 +2430,19 @@ async function main() {
           timeoutMs: 600000,
           stopOnFailure: false,
           readyWhen(current) {
-            // Wait for both eval queries to finish and their results to be
-            // decoded — that is the earliest point load_world:decoded fires.
-            // Also stop early on load_world:failed so we surface the error
-            // quickly rather than burning the full 10-minute budget.
+            // Wait for load_world:decoded — that fires once both Rocq eval
+            // queries have returned parseable data.
+            //
+            // Deliberately do NOT stop on load_world:failed.  The game calls
+            // load_world multiple times (e.g. on window refocus), and the
+            // first call can fail transiently (JsCoq stack overflow on large
+            // entity expressions) while later calls succeed.  Stopping on
+            // the first failed event would cut polling before a subsequent
+            // successful decoded event could be observed.  The 10-minute
+            // timeoutMs covers theory compilation + query retries.
             const events = current.rocqSyncDiagnostics?.events;
             if (!Array.isArray(events)) return false;
-            return events.some(
-              e => e.stage === 'load_world:decoded' || e.stage === 'load_world:failed'
-            );
+            return events.some(e => e.stage === 'load_world:decoded');
           },
           assert(snapshot, consoleEvents) {
             assertLoadWorldRocqQueriesSucceedScenario(snapshot, consoleEvents);

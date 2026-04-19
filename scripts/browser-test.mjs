@@ -2413,8 +2413,11 @@ async function main() {
           // rocq_sync_timeout_ms is set to 10 minutes so the eval queries
           // have room to complete on constrained CI hardware (the default
           // 60 s inactivity timeout is too short — the queries can take
-          // several minutes after helpers-ready).  timeoutMs (10 min) covers
-          // theory compilation (~230 s) plus both query executions.
+          // several minutes after helpers-ready).  timeoutMs (20 min) covers
+          // theory compilation (~230 s on CI) plus multiple query retry
+          // attempts (the first load_world call can fail transiently with a
+          // JsCoq stack overflow on large entity expressions, and subsequent
+          // calls need time to succeed).
           //
           // stopOnFailure is false so that a WebGL context loss during heavy
           // WASM compilation (which logs "BSP render init failed") does not
@@ -2426,8 +2429,8 @@ async function main() {
           contextOptions: {
             viewport: { width: 1280, height: 720 },
           },
-          query: 'rocq_sync_timeout_ms=600000',
-          timeoutMs: 600000,
+          query: 'rocq_sync_timeout_ms=1200000',
+          timeoutMs: 1200000,
           stopOnFailure: false,
           readyWhen(current) {
             // Wait for load_world:decoded — that fires once both Rocq eval
@@ -2438,7 +2441,7 @@ async function main() {
             // first call can fail transiently (JsCoq stack overflow on large
             // entity expressions) while later calls succeed.  Stopping on
             // the first failed event would cut polling before a subsequent
-            // successful decoded event could be observed.  The 10-minute
+            // successful decoded event could be observed.  The 20-minute
             // timeoutMs covers theory compilation + query retries.
             const events = current.rocqSyncDiagnostics?.events;
             if (!Array.isArray(events)) return false;
